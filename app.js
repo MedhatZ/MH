@@ -528,6 +528,19 @@ const ZOOM_STEP = 1.2;
 const MIN_ZOOM = 0.15; // user multiplier; with initialScale=1.4 → ~21% display
 const MAX_ZOOM = 8; // user multiplier; with initialScale=1.4 → ~1120% display
 
+// Mobile/tablet rendering uses a different fit strategy: width-fit the WHOLE
+// diagram with no readable-min-scale floor, center on the actual rendered
+// bounding box, and use tighter padding. Desktop UX is intentionally untouched.
+const MOBILE_BREAKPOINT_PX = 768;
+const MOBILE_PAD = 12;
+const MOBILE_MIN_HEIGHT = 200;
+const MOBILE_MAX_INITIAL_SCALE = 1.2;
+
+function isMobileViewport() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_PX}px)`).matches;
+}
+
 function applyTransform(card) {
   const pan = card.element && card.element.querySelector(".diagramCard__pan");
   if (!pan) return;
@@ -565,6 +578,71 @@ function applyReadableInitialView(card) {
   applyTransform(card);
 }
 
+// Mobile fit. Replaces the readable-first heuristic with a "show the whole
+// diagram on screen, centered on its real bounding box" strategy. Keeps the
+// same { initialScale, zoom, panX, panY } state shape so manual zoom + drag
+// work unchanged after init.
+function applyMobileFitView(card) {
+  const viewport = card.element.querySelector(".diagramCard__diagram");
+  const pan = card.element.querySelector(".diagramCard__pan");
+  const svgEl = pan && pan.querySelector("svg");
+  if (!viewport || !svgEl || !card.viewBoxW || !card.viewBoxH) return;
+
+  // Use the real viewport width — no desktop floor that would push wide
+  // diagrams off the right edge of phones smaller than 360 px.
+  const containerW = Math.max(200, viewport.clientWidth || 320);
+
+  // Prefer the rendered content bbox over the declared viewBox: Mermaid
+  // sometimes pads the viewBox and that bias is what makes diagrams render
+  // partially off-screen on phones. Falls back to viewBox if getBBox fails.
+  let contentW = card.viewBoxW;
+  let contentH = card.viewBoxH;
+  let contentX = 0;
+  let contentY = 0;
+  try {
+    const bbox = svgEl.getBBox();
+    if (bbox && bbox.width > 0 && bbox.height > 0) {
+      contentW = bbox.width;
+      contentH = bbox.height;
+      contentX = bbox.x;
+      contentY = bbox.y;
+    }
+  } catch {
+    // ignore — fall back to viewBox dims.
+  }
+
+  // Width-fit only, no readable-min-scale floor. Slight extra reduction for
+  // wide branching diagrams so they don't kiss the edges on phones.
+  const widthFit = (containerW - MOBILE_PAD * 2) / contentW;
+  const branchPenalty = contentW > 1200 ? 0.92 : contentW > 700 ? 0.96 : 1;
+  const initialScale = Math.min(
+    MOBILE_MAX_INITIAL_SCALE,
+    Math.max(0.05, widthFit * branchPenalty),
+  );
+
+  card.initialScale = initialScale;
+  card.zoom = 1;
+  // Center horizontally on the actual content extent (handles non-zero bbox.x)
+  // and top-align with MOBILE_PAD. After scale s and translate (panX, panY),
+  // viewBox point (vx, vy) renders at (panX + s*vx, panY + s*vy), so:
+  //   center: panX + s*(contentX + contentW/2) = containerW/2
+  //   top:    panY + s*contentY              = MOBILE_PAD
+  card.panX = containerW / 2 - initialScale * (contentX + contentW / 2);
+  card.panY = MOBILE_PAD - initialScale * contentY;
+
+  const scaledContentH = contentH * initialScale;
+  viewport.style.height = `${Math.max(MOBILE_MIN_HEIGHT, scaledContentH + MOBILE_PAD * 2)}px`;
+
+  applyTransform(card);
+}
+
+// Dispatch to the right initial-view strategy. Desktop path is left exactly
+// as it was; mobile gets the dedicated viewport-fit pass.
+function applyInitialView(card) {
+  if (isMobileViewport()) applyMobileFitView(card);
+  else applyReadableInitialView(card);
+}
+
 function setupZoomPan(card) {
   const viewport = card.element.querySelector(".diagramCard__diagram");
   const pan = card.element.querySelector(".diagramCard__pan");
@@ -594,7 +672,7 @@ function setupZoomPan(card) {
   pan.style.transformOrigin = "0 0";
   pan.style.willChange = "transform";
 
-  applyReadableInitialView(card);
+  applyInitialView(card);
 
   // Zoom around an arbitrary point (kept stationary in viewport coords).
   const setZoomAround = (newZoom, cx, cy) => {
@@ -619,7 +697,7 @@ function setupZoomPan(card) {
 
   if (btnIn) btnIn.addEventListener("click", () => zoomFromCenter(ZOOM_STEP));
   if (btnOut) btnOut.addEventListener("click", () => zoomFromCenter(1 / ZOOM_STEP));
-  if (btnReset) btnReset.addEventListener("click", () => applyReadableInitialView(card));
+  if (btnReset) btnReset.addEventListener("click", () => applyInitialView(card));
 
   // Wheel zoom — Ctrl/Meta required so plain wheel still scrolls the page.
   const onWheel = (e) => {
@@ -662,6 +740,27 @@ function setupZoomPan(card) {
   };
   viewport.addEventListener("mousedown", onMouseDown);
   card._onMouseDown = onMouseDown;
+
+  // Mobile-only resize / orientation handler. On rotation or browser-chrome
+  // changes, re-fit the diagram so it never ends up off-screen. Desktop is
+  // left untouched per spec; if the user crosses back from mobile->desktop
+  // we hand off to the desktop fit once so the card isn't stuck in mobile pose.
+  let resizeRaf = 0;
+  let lastWasMobile = isMobileViewport();
+  const onResize = () => {
+    cancelAnimationFrame(resizeRaf);
+    resizeRaf = requestAnimationFrame(() => {
+      const nowMobile = isMobileViewport();
+      if (nowMobile) {
+        applyMobileFitView(card);
+      } else if (lastWasMobile) {
+        applyReadableInitialView(card);
+      }
+      lastWasMobile = nowMobile;
+    });
+  };
+  window.addEventListener("resize", onResize);
+  card._onResize = onResize;
 }
 
 function teardownZoomPan(card) {
@@ -669,6 +768,10 @@ function teardownZoomPan(card) {
   if (viewport) {
     if (card._onWheel) viewport.removeEventListener("wheel", card._onWheel);
     if (card._onMouseDown) viewport.removeEventListener("mousedown", card._onMouseDown);
+  }
+  if (card._onResize) {
+    window.removeEventListener("resize", card._onResize);
+    card._onResize = null;
   }
   card._onWheel = null;
   card._onMouseDown = null;

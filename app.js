@@ -29,36 +29,23 @@ const el = {
   input: document.getElementById("promptInput"),
   btnGenerate: document.getElementById("btnGenerate"),
   btnSetKey: document.getElementById("btnSetKey"),
+  btnClearHistory: document.getElementById("btnClearHistory"),
   tagList: document.getElementById("tagList"),
   loading: document.getElementById("loading"),
   error: document.getElementById("errorBox"),
   status: document.getElementById("statusPill"),
-  diagram: document.getElementById("diagram"),
-  codeDetails: document.getElementById("codeDetails"),
-  codeBlock: document.getElementById("codeBlock"),
-  btnCopy: document.getElementById("btnCopy"),
-  btnFormat: document.getElementById("btnFormat"),
-
-  drillDetails: document.getElementById("drillDetails"),
-  drillForm: document.getElementById("drillForm"),
-  drillNode: document.getElementById("drillNode"),
-  drillQuestion: document.getElementById("drillQuestion"),
-  drillDiagram: document.getElementById("drillDiagram"),
-  drillCodeDetails: document.getElementById("drillCodeDetails"),
-  drillCodeBlock: document.getElementById("drillCodeBlock"),
-  drillLoading: document.getElementById("drillLoading"),
-  drillError: document.getElementById("drillError"),
-  btnAsk: document.getElementById("btnAsk"),
+  history: document.getElementById("diagramHistory"),
+  historyEmpty: document.getElementById("historyEmpty"),
+  historyCount: document.getElementById("historyCount"),
 };
 
-let lastMermaidCode = "";
-let lastDrillMermaidCode = "";
-let selectedNodeLabel = "";
+// Diagram history: ordered list of card metadata.
+// Each card: { id, depth, title, parentLabel, parentCardId, timestamp, mermaidCode, element, selectedNode }
+const history = [];
+let cardCounter = 0;
 
 function getApiKey() {
-  // Preferred: injected global for demo builds
   if (typeof window !== "undefined" && window.ANTHROPIC_API_KEY) return String(window.ANTHROPIC_API_KEY).trim();
-  // Fallback: localStorage for static hosting
   try {
     const v = localStorage.getItem("ANTHROPIC_API_KEY");
     if (v) return v.trim();
@@ -108,31 +95,14 @@ function clearError() {
   el.error.textContent = "";
 }
 
-function setDrillLoading(on) {
-  el.drillLoading.classList.toggle("hidden", !on);
-  el.btnAsk.disabled = on;
-  el.drillQuestion.disabled = on;
-}
-
-function showDrillError(message) {
-  el.drillError.textContent = message;
-  el.drillError.classList.remove("hidden");
-}
-
-function clearDrillError() {
-  el.drillError.classList.add("hidden");
-  el.drillError.textContent = "";
-}
-
 function normalizeMermaid(raw) {
   const s = String(raw || "").replace(/\r\n/g, "\n").trim();
-  // Remove accidental fences if the model misbehaves
   const noFences = s
     .replace(/^```[a-zA-Z]*\n/, "")
     .replace(/\n```$/, "")
     .trim();
-  // Force top-down for flowcharts/graphs when the model returns LR/RL/BT/TB or no direction
-  // (Keeps other diagram types unchanged.)
+  // Force top-down for flowcharts/graphs when the model returns LR/RL/BT/TB or no direction.
+  // Other diagram types are left untouched.
   const forced = noFences
     .replace(/^(flowchart)\s+(LR|RL|BT|TB|TD)\b/im, "flowchart TD")
     .replace(/^(graph)\s+(LR|RL|BT|TB|TD)\b/im, "graph TD")
@@ -164,62 +134,26 @@ function highlightSelectedNode(rootEl, nodeEl) {
   if (nodeEl) nodeEl.classList.add("is-selected");
 }
 
-function handleNodeQuestion(label, nodeEl, rootEl) {
-  selectedNodeLabel = label;
-  el.drillDetails.open = true;
-  el.drillNode.textContent = label || "Unknown node";
-  highlightSelectedNode(rootEl, nodeEl);
-
-  const q =
-    `Generate a detailed Mermaid flowchart explaining how to perform:\n` +
-    `"${label}"\n\n` +
-    `Requirements:\n` +
-    `- Return ONLY Mermaid code\n` +
-    `- Use flowchart TD\n` +
-    `- Make the diagram vertically readable\n` +
-    `- Keep labels concise\n` +
-    `- Use valid Mermaid syntax only\n` +
-    `- No markdown fences\n` +
-    `- No explanations\n`;
-  el.drillQuestion.value = q;
-  el.drillQuestion.focus();
-  el.drillQuestion.setSelectionRange(el.drillQuestion.value.length, el.drillQuestion.value.length);
+function formatTime(d) {
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
 }
 
-function bindNodeClicks(rootEl) {
-  const nodes = rootEl.querySelectorAll(".node");
-  nodes.forEach((node) => {
-    node.style.cursor = "pointer";
-    node.setAttribute("tabindex", "0");
-    node.setAttribute("role", "button");
-
-    const onPick = (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const label = getNodeLabel(node);
-      if (label) handleNodeQuestion(label, node, rootEl);
-    };
-
-    node.addEventListener("click", onPick);
-    node.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") onPick(e);
-    });
-  });
+function truncate(s, n) {
+  const v = String(s || "");
+  return v.length > n ? v.slice(0, n - 1) + "…" : v;
 }
 
-function guessFallbackDiagram(promptText) {
-  const t = String(promptText || "").toLowerCase();
-  if (t.includes("sequence")) return "sequenceDiagram\nparticipant User\nparticipant System\nUser->>System: Request\nSystem-->>User: Response";
-  if (t.includes("class")) return "classDiagram\nclass User\nclass Account\nUser --> Account";
-  if (t.includes("er")) return "erDiagram\nUSER ||--o{ ORDER : places\nORDER ||--|{ ORDER_ITEM : contains";
-  if (t.includes("gantt")) return "gantt\ntitle Project Plan\nsection Phase 1\nTask A :a1, 2026-01-01, 7d\nTask B :after a1, 5d";
-  if (t.includes("state")) return "stateDiagram-v2\n[*] --> Idle\nIdle --> Working : start\nWorking --> Idle : done";
-  if (t.includes("mindmap")) return "mindmap\n  root((DiagramStore))\n    Search\n    Generate\n    Preview";
-  return "flowchart TD\nA[Prompt] --> B[Claude API]\nB --> C[Mermaid Code]\nC --> D[Render]";
+function updateHistoryUi() {
+  el.historyCount.textContent = String(history.length);
+  el.historyEmpty.classList.toggle("hidden", history.length > 0);
+  el.btnClearHistory.disabled = history.length === 0;
 }
 
 async function callClaudeForMermaid(userPrompt) {
-  const apiKey = getApiKey(); // optional; server can also use env var
+  const apiKey = getApiKey();
 
   const res = await fetch(ANTHROPIC_ENDPOINT, {
     method: "POST",
@@ -241,7 +175,6 @@ async function callClaudeForMermaid(userPrompt) {
   }
 
   const data = await res.json();
-  // Anthropic Messages API returns: { content: [{ type:"text", text:"..." }, ...] }
   const parts = Array.isArray(data?.content) ? data.content : [];
   const text = parts
     .filter((p) => p && p.type === "text" && typeof p.text === "string")
@@ -253,8 +186,8 @@ async function callClaudeForMermaid(userPrompt) {
   return text;
 }
 
-async function callClaudeForDrilldown(nodeLabel, question, diagramCode, parentDrillCode) {
-  const apiKey = getApiKey(); // optional; server can also use env var
+async function callClaudeForDrilldown(nodeLabel, question, parentDiagramCode) {
+  const apiKey = getApiKey();
 
   const system =
     "You are a Mermaid.js diagram expert. Return ONLY valid Mermaid diagram code with no explanation, no backticks, no markdown fences.\n" +
@@ -266,10 +199,7 @@ async function callClaudeForDrilldown(nodeLabel, question, diagramCode, parentDr
 
   const user = [
     "Parent diagram context (Mermaid):",
-    diagramCode || "(none)",
-    "",
-    "Previous sub-diagram (optional):",
-    parentDrillCode || "(none)",
+    parentDiagramCode || "(none)",
     "",
     `Selected step: ${nodeLabel || "(unknown)"}`,
     "",
@@ -307,41 +237,273 @@ async function callClaudeForDrilldown(nodeLabel, question, diagramCode, parentDr
   return text;
 }
 
-async function renderDrillMermaid(code) {
-  const clean = normalizeMermaid(code);
-  lastDrillMermaidCode = clean;
-  el.drillCodeBlock.textContent = clean;
-  el.drillCodeDetails.open = true;
+function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
+  cardCounter += 1;
+  const id = `card-${cardCounter}`;
+  const timestamp = new Date();
 
-  const id = `mmd-drill-${Math.random().toString(16).slice(2)}`;
-  el.drillDiagram.innerHTML = "";
+  const card = document.createElement("article");
+  card.className = "diagramCard";
+  card.dataset.id = id;
+  card.dataset.depth = String(depth);
 
-  const { svg } = await mermaid.render(id, clean);
-  el.drillDiagram.innerHTML = svg;
-  bindNodeClicks(el.drillDiagram);
+  const isRoot = !parentCardId;
+  const depthLabel = isRoot ? `Root · Depth ${depth}` : `Depth ${depth}`;
+  const depthClass = isRoot ? "diagramCard__depth diagramCard__depth--root" : "diagramCard__depth";
+
+  card.innerHTML = `
+    <header class="diagramCard__header">
+      <div class="diagramCard__badges">
+        <span class="${depthClass}">${depthLabel}</span>
+        <span class="diagramCard__time" title="${timestamp.toISOString()}">${formatTime(timestamp)}</span>
+      </div>
+      <div class="diagramCard__titleRow">
+        <div class="diagramCard__title"></div>
+        <button class="diagramCard__remove" type="button" title="Remove this diagram" aria-label="Remove this diagram">×</button>
+      </div>
+      <div class="diagramCard__parent"></div>
+    </header>
+
+    <div class="diagramCard__diagramWrap">
+      <div class="diagramCard__diagram" aria-label="Rendered diagram"></div>
+    </div>
+
+    <div class="diagramCard__nodeInfo hidden">
+      <div class="diagramCard__nodeLabel">
+        Selected node: <strong class="diagramCard__nodeText"></strong>
+      </div>
+      <form class="diagramCard__askForm" autocomplete="off">
+        <input
+          class="diagramCard__askInput"
+          type="text"
+          placeholder='e.g. "Explain this step in more detail"'
+          required
+        />
+        <button type="submit" class="diagramCard__askBtn">Ask</button>
+      </form>
+      <div class="diagramCard__drillLoading hidden" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>Thinking…</div>
+      </div>
+      <div class="diagramCard__drillError hidden" role="alert"></div>
+    </div>
+
+    <details class="diagramCard__code" open>
+      <summary class="diagramCard__codeSummary">
+        <span>Mermaid code</span>
+        <span class="diagramCard__codeHint">click to collapse</span>
+      </summary>
+      <div class="diagramCard__codeToolbar">
+        <button type="button" class="btn diagramCard__copy">Copy</button>
+      </div>
+      <div class="diagramCard__codeBody">
+        <pre class="code__pre"><code class="code__code diagramCard__codeBlock"></code></pre>
+      </div>
+    </details>
+  `;
+
+  card.querySelector(".diagramCard__title").textContent = title || (isRoot ? "Diagram" : "Sub-diagram");
+
+  const parentEl = card.querySelector(".diagramCard__parent");
+  if (parentCardId && parentLabel) {
+    const parentCard = history.find((c) => c.id === parentCardId);
+    const fromLabel = parentCard ? truncate(parentCard.title, 60) : "previous diagram";
+    parentEl.innerHTML = `From <strong>${escapeHtml(fromLabel)}</strong> → node <strong>${escapeHtml(parentLabel)}</strong>`;
+  } else {
+    parentEl.textContent = "Top-level diagram from your prompt.";
+  }
+
+  const meta = {
+    id,
+    depth,
+    title,
+    parentLabel,
+    parentCardId,
+    timestamp,
+    mermaidCode: "",
+    element: card,
+    selectedNode: { label: "", el: null },
+  };
+
+  card.querySelector(".diagramCard__remove").addEventListener("click", () => removeCard(id));
+  card.querySelector(".diagramCard__copy").addEventListener("click", (e) => copyCardCode(meta, e.currentTarget));
+  card.querySelector(".diagramCard__askForm").addEventListener("submit", (e) => onAskFromCard(e, meta));
+
+  history.push(meta);
+  el.history.appendChild(card);
+  updateHistoryUi();
+
+  return meta;
 }
 
-async function renderMermaid(code) {
-  const clean = normalizeMermaid(code);
-  el.codeBlock.textContent = clean;
-  el.codeDetails.open = true;
-  lastMermaidCode = clean;
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
-  // Ensure unique IDs for repeated renders
-  const id = `mmd-${Math.random().toString(16).slice(2)}`;
-  el.diagram.innerHTML = "";
+function removeCard(cardId) {
+  const idx = history.findIndex((c) => c.id === cardId);
+  if (idx < 0) return;
+  const card = history[idx];
+  card.element.remove();
+  history.splice(idx, 1);
+  updateHistoryUi();
+}
+
+function clearHistory() {
+  for (const card of history.slice()) card.element.remove();
+  history.length = 0;
+  updateHistoryUi();
+}
+
+async function copyCardCode(card, btn) {
+  const v = card.mermaidCode || "";
+  if (!v) return;
+  const reset = () => {
+    btn.textContent = "Copy";
+    btn.disabled = false;
+  };
+  try {
+    await navigator.clipboard.writeText(v);
+    btn.textContent = "Copied";
+    btn.disabled = true;
+    window.setTimeout(reset, 900);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = v;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch {
+      // ignore
+    }
+    document.body.removeChild(ta);
+    btn.textContent = "Copied";
+    btn.disabled = true;
+    window.setTimeout(reset, 900);
+  }
+}
+
+function bindCardNodeClicks(card) {
+  const rootEl = card.element.querySelector(".diagramCard__diagram");
+  rootEl.querySelectorAll(".node").forEach((node) => {
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "button");
+
+    const onPick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const label = getNodeLabel(node);
+      if (label) selectCardNode(card, label, node);
+    };
+
+    node.addEventListener("click", onPick);
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") onPick(e);
+    });
+  });
+}
+
+function selectCardNode(card, label, nodeEl) {
+  card.selectedNode = { label, el: nodeEl };
+
+  const rootEl = card.element.querySelector(".diagramCard__diagram");
+  highlightSelectedNode(rootEl, nodeEl);
+
+  const nodeInfo = card.element.querySelector(".diagramCard__nodeInfo");
+  nodeInfo.classList.remove("hidden");
+
+  card.element.querySelector(".diagramCard__nodeText").textContent = label;
+
+  const errEl = card.element.querySelector(".diagramCard__drillError");
+  errEl.classList.add("hidden");
+  errEl.textContent = "";
+
+  const input = card.element.querySelector(".diagramCard__askInput");
+  if (!input.value.trim()) {
+    input.value = `Explain "${label}" in more detail with a step-by-step flowchart.`;
+  }
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+async function renderCardDiagram(card, code) {
+  const clean = normalizeMermaid(code);
+  card.mermaidCode = clean;
+
+  const codeBlock = card.element.querySelector(".diagramCard__codeBlock");
+  codeBlock.textContent = clean;
+
+  const diagram = card.element.querySelector(".diagramCard__diagram");
+  diagram.innerHTML = "";
+  const renderId = `mmd-${card.id}-${Math.random().toString(16).slice(2)}`;
 
   try {
-    const { svg } = await mermaid.render(id, clean);
-    el.diagram.innerHTML = svg;
-    setStatus("pill--ok", "Rendered");
-    bindNodeClicks(el.diagram);
+    const { svg } = await mermaid.render(renderId, clean);
+    diagram.innerHTML = svg;
+    bindCardNodeClicks(card);
   } catch (e) {
-    // Show raw code if render fails
-    el.diagram.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
-      Mermaid render error. Check the Mermaid code below.
+    diagram.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
+      Mermaid render error. Check the code below.
     </div>`;
     throw new Error(`Mermaid render error: ${e?.message || String(e)}`);
+  }
+}
+
+async function onAskFromCard(e, card) {
+  e.preventDefault();
+
+  const askInput = card.element.querySelector(".diagramCard__askInput");
+  const errorEl = card.element.querySelector(".diagramCard__drillError");
+  const loadingEl = card.element.querySelector(".diagramCard__drillLoading");
+  const submitBtn = card.element.querySelector(".diagramCard__askBtn");
+
+  errorEl.classList.add("hidden");
+  errorEl.textContent = "";
+
+  const question = (askInput.value || "").trim();
+  if (!card.selectedNode.label) {
+    errorEl.textContent = "Click a node in this diagram first.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  if (!question) {
+    errorEl.textContent = "Type a question.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+
+  loadingEl.classList.remove("hidden");
+  submitBtn.disabled = true;
+  askInput.disabled = true;
+
+  try {
+    const code = await callClaudeForDrilldown(card.selectedNode.label, question, card.mermaidCode);
+
+    const childCard = createCard({
+      depth: card.depth + 1,
+      title: card.selectedNode.label,
+      parentLabel: card.selectedNode.label,
+      parentCardId: card.id,
+    });
+
+    await renderCardDiagram(childCard, code);
+    setStatus("pill--ok", "Rendered");
+    childCard.element.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (err) {
+    errorEl.textContent = err?.message || String(err);
+    errorEl.classList.remove("hidden");
+  } finally {
+    loadingEl.classList.add("hidden");
+    submitBtn.disabled = false;
+    askInput.disabled = false;
   }
 }
 
@@ -368,33 +530,6 @@ function buildTags() {
   el.tagList.appendChild(frag);
 }
 
-function cleanUpCode() {
-  const v = normalizeMermaid(el.codeBlock.textContent);
-  el.codeBlock.textContent = v;
-}
-
-async function copyCode() {
-  const v = el.codeBlock.textContent || "";
-  if (!v) return;
-  try {
-    await navigator.clipboard.writeText(v);
-    el.btnCopy.textContent = "Copied";
-    window.setTimeout(() => (el.btnCopy.textContent = "Copy"), 900);
-  } catch {
-    // Fallback
-    const ta = document.createElement("textarea");
-    ta.value = v;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    el.btnCopy.textContent = "Copied";
-    window.setTimeout(() => (el.btnCopy.textContent = "Copy"), 900);
-  }
-}
-
 async function onSubmit(e) {
   e.preventDefault();
   clearError();
@@ -406,42 +541,19 @@ async function onSubmit(e) {
   setLoading(true);
   try {
     const mermaidCode = await callClaudeForMermaid(promptText);
-    await renderMermaid(mermaidCode);
+    const rootCard = createCard({
+      depth: 1,
+      title: truncate(promptText, 120),
+      parentLabel: "",
+      parentCardId: null,
+    });
+    await renderCardDiagram(rootCard, mermaidCode);
+    setStatus("pill--ok", "Rendered");
+    rootCard.element.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err) {
-    const msg = err?.message || String(err);
-    showError(msg);
-    // still show something useful
-    const fallback = guessFallbackDiagram(promptText);
-    el.codeBlock.textContent = fallback;
-    el.diagram.innerHTML =
-      `<div style="padding:12px;color:#667085;font-size:13px;">
-        Showing a local fallback diagram. Fix the error above and try again.
-      </div>`;
+    showError(err?.message || String(err));
   } finally {
     setLoading(false);
-  }
-}
-
-async function onAskDrilldown(e) {
-  e.preventDefault();
-  clearDrillError();
-
-  const question = (el.drillQuestion.value || "").trim();
-  if (!question) return;
-
-  if (!selectedNodeLabel) {
-    showDrillError("Click a node in the diagram first.");
-    return;
-  }
-
-  setDrillLoading(true);
-  try {
-    const mermaidCode = await callClaudeForDrilldown(selectedNodeLabel, question, lastMermaidCode, lastDrillMermaidCode);
-    await renderDrillMermaid(mermaidCode);
-  } catch (err) {
-    showDrillError(err?.message || String(err));
-  } finally {
-    setDrillLoading(false);
   }
 }
 
@@ -451,7 +563,6 @@ function initMermaid() {
     securityLevel: "strict",
     theme: "default",
     flowchart: {
-      // Encourage compact, readable vertical layouts
       curve: "linear",
       nodeSpacing: 35,
       rankSpacing: 55,
@@ -459,26 +570,46 @@ function initMermaid() {
   });
 }
 
+async function showWelcomeCard() {
+  const card = createCard({
+    depth: 1,
+    title: "Welcome — click any node to drill down",
+    parentLabel: "",
+    parentCardId: null,
+  });
+  const code =
+    "flowchart TD\n" +
+    "A[DiagramStore Demo] --> B[Type a prompt above]\n" +
+    "B --> C[Generate]\n" +
+    "C --> D[Click any node]\n" +
+    "D --> E[Sub-diagram appears below]\n" +
+    "E --> F[Keep drilling deeper]";
+  try {
+    await renderCardDiagram(card, code);
+    setStatus("pill--ok", "Rendered");
+  } catch {
+    // ignore — welcome card render is best-effort
+  }
+}
+
 function boot() {
   buildTags();
   initMermaid();
+  updateHistoryUi();
 
   el.form.addEventListener("submit", onSubmit);
   el.btnSetKey.addEventListener("click", setApiKeyInteractive);
-  el.btnCopy.addEventListener("click", copyCode);
-  el.btnFormat.addEventListener("click", cleanUpCode);
-  el.drillForm.addEventListener("submit", onAskDrilldown);
+  el.btnClearHistory.addEventListener("click", () => {
+    if (history.length === 0) return;
+    const ok = window.confirm("Clear all diagrams from the history?");
+    if (ok) {
+      clearHistory();
+      setStatus("pill--idle", "Idle");
+    }
+  });
 
-  // Initial demo diagram
-  const initial = "flowchart TD\nA[DiagramStore Demo] --> B[Type prompt]\nB --> C[Generate]\nC --> D[Mermaid renders here]";
-  renderMermaid(initial).catch(() => {});
-  el.codeBlock.textContent = initial;
+  showWelcomeCard().catch(() => {});
   setStatus("pill--idle", "Idle");
-
-  // Initial drill-down placeholder diagram
-  const drillInitial = "flowchart TD\nA[Click any node] --> B[Ask for a sub-diagram]\nB --> C[Explore deeper by clicking sub-nodes]";
-  renderDrillMermaid(drillInitial).catch(() => {});
 }
 
 boot();
-

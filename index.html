@@ -72,86 +72,29 @@
 
         <section class="content" aria-label="Diagram preview">
           <div class="content__header">
-            <div class="content__title">Preview</div>
+            <div class="content__title">
+              Exploration history
+              <span id="historyCount" class="content__count" aria-label="Number of diagrams">0</span>
+            </div>
             <div class="content__meta">
+              <button id="btnClearHistory" class="btn btn--ghost" type="button" title="Remove all diagrams">
+                Clear all
+              </button>
               <span id="statusPill" class="pill pill--idle">Idle</span>
             </div>
           </div>
 
-          <div class="panel">
-            <div id="loading" class="loading hidden" aria-live="polite">
-              <div class="spinner" aria-hidden="true"></div>
-              <div class="loading__text">Generating diagram…</div>
-            </div>
+          <div id="loading" class="loading hidden" aria-live="polite">
+            <div class="spinner" aria-hidden="true"></div>
+            <div class="loading__text">Generating diagram…</div>
+          </div>
 
-            <div id="errorBox" class="error hidden" role="alert"></div>
+          <div id="errorBox" class="error hidden" role="alert"></div>
 
-            <div class="diagramWrap">
-              <div id="diagram" class="diagram" aria-label="Rendered diagram"></div>
-            </div>
+          <div id="diagramHistory" class="history" aria-live="polite"></div>
 
-            <details id="drillDetails" class="drill" open>
-              <summary class="drill__summary">
-                <span>Drill‑down (click a node)</span>
-                <span class="drill__summaryHint">interactive learning</span>
-              </summary>
-              <div class="drill__body">
-                <div class="drill__row">
-                  <div class="drill__label">Selected node</div>
-                  <div id="drillNode" class="drill__value">None (click a box in the diagram)</div>
-                </div>
-
-                <form id="drillForm" class="drill__form" autocomplete="off">
-                  <label class="drill__label" for="drillQuestion">Ask a question</label>
-                  <div class="drill__inputRow">
-                    <input
-                      id="drillQuestion"
-                      class="drill__input"
-                      type="text"
-                      placeholder='e.g. "How do you request landing clearance?"'
-                      required
-                    />
-                    <button id="btnAsk" class="drill__btn" type="submit">Ask</button>
-                  </div>
-                  <div id="drillLoading" class="drill__loading hidden" aria-live="polite">
-                    <div class="spinner" aria-hidden="true"></div>
-                    <div>Thinking…</div>
-                  </div>
-                  <div id="drillError" class="drill__error hidden" role="alert"></div>
-                </form>
-
-                <div class="drill__answerWrap">
-                  <div class="drill__label">Sub‑diagram</div>
-                  <div id="drillDiagramWrap" class="drill__diagramWrap">
-                    <div id="drillDiagram" class="drill__diagram" aria-label="Rendered sub-diagram"></div>
-                  </div>
-
-                  <details id="drillCodeDetails" class="drill__code" open>
-                    <summary class="drill__codeSummary">
-                      <span>Sub‑diagram Mermaid code</span>
-                      <span class="code__summaryHint">click to collapse</span>
-                    </summary>
-                    <pre class="code__pre"><code id="drillCodeBlock" class="code__code"></code></pre>
-                  </details>
-                </div>
-              </div>
-            </details>
-
-            <details id="codeDetails" class="code" open>
-              <summary class="code__summary">
-                <span>Mermaid code</span>
-                <span class="code__summaryHint">click to collapse</span>
-              </summary>
-              <div class="code__body">
-                <div class="code__toolbar">
-                  <button id="btnCopy" class="btn" type="button">Copy</button>
-                  <button id="btnFormat" class="btn btn--ghost" type="button" title="Trim and normalize">
-                    Clean up
-                  </button>
-                </div>
-                <pre class="code__pre"><code id="codeBlock" class="code__code"></code></pre>
-              </div>
-            </details>
+          <div id="historyEmpty" class="history__empty">
+            No diagrams yet. Type a prompt above and press <strong>Generate</strong> to start exploring.
           </div>
         </section>
       </section>

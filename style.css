@@ -158,8 +158,26 @@ button,input{font:inherit}
 .content__header{
   display:flex;align-items:center;justify-content:space-between;
   padding:4px 2px 10px;
+  gap:10px;
+  flex-wrap:wrap;
 }
-.content__title{font-weight:800}
+.content__title{
+  font-weight:800;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+}
+.content__count{
+  display:inline-flex;
+  align-items:center;justify-content:center;
+  min-width:22px;height:22px;padding:0 6px;
+  border-radius:999px;
+  background:#eef2ff;
+  color:#3730a3;
+  font-size:11px;font-weight:700;
+  border:1px solid #c7d2fe;
+}
+.content__meta{display:flex;align-items:center;gap:10px}
 .pill{
   display:inline-flex;align-items:center;gap:6px;
   font-size:12px;
@@ -173,12 +191,215 @@ button,input{font:inherit}
 .pill--ok{color:var(--pillOk); border-color:#bbf7d0; background:#f0fdf4}
 .pill--error{color:var(--danger); border-color:#fecaca; background:var(--dangerBg)}
 
-.panel{
+.history{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+.history__empty{
+  padding:18px;
+  border:1px dashed var(--border);
+  border-radius:14px;
+  background:#fff;
+  color:var(--muted);
+  font-size:13px;
+  text-align:center;
+}
+.history__empty.hidden{display:none}
+
+.diagramCard{
   background:var(--panel);
   border:1px solid var(--border);
   border-radius:14px;
   box-shadow:var(--shadow);
   overflow:hidden;
+  animation: cardIn .25s ease;
+}
+@keyframes cardIn{
+  from{opacity:0; transform:translateY(6px)}
+  to{opacity:1; transform:translateY(0)}
+}
+
+.diagramCard__header{
+  padding:12px 14px 10px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,#fff,#fafbff);
+}
+.diagramCard__badges{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:6px;
+}
+.diagramCard__depth{
+  display:inline-flex;align-items:center;
+  font-size:11px;font-weight:700;
+  padding:3px 8px;
+  border-radius:999px;
+  background:#eef2ff;
+  color:#3730a3;
+  border:1px solid #c7d2fe;
+}
+.diagramCard__depth--root{
+  background:#ecfdf5;
+  color:#065f46;
+  border-color:#bbf7d0;
+}
+.diagramCard__time{
+  font-size:11px;
+  color:var(--muted);
+}
+.diagramCard__titleRow{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.diagramCard__title{
+  flex:1;
+  font-weight:800;
+  font-size:14px;
+  color:var(--text);
+  line-height:1.35;
+  word-break:break-word;
+}
+.diagramCard__remove{
+  border:1px solid var(--border);
+  background:#fff;
+  color:var(--muted);
+  width:28px;height:28px;
+  border-radius:8px;
+  cursor:pointer;
+  display:grid;place-items:center;
+  font-size:16px;
+  line-height:1;
+  flex-shrink:0;
+}
+.diagramCard__remove:hover{
+  background:var(--dangerBg);
+  color:var(--danger);
+  border-color:#fecaca;
+}
+.diagramCard__parent{
+  margin-top:4px;
+  font-size:12px;
+  color:var(--muted);
+}
+.diagramCard__parent strong{color:var(--text)}
+
+.diagramCard__diagramWrap{
+  padding:14px;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(16,24,40,.08) 1px, transparent 0) 0 0/18px 18px;
+}
+.diagramCard__diagram{
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:14px;
+  min-height:240px;
+  overflow:auto;
+}
+.diagramCard__diagram svg{
+  max-width:100%;
+  height:auto;
+  display:block;
+}
+.diagramCard__diagram .node text,
+.diagramCard__diagram .label text{
+  font-size:14px;
+}
+.diagramCard__diagram .node{
+  cursor:pointer;
+  transition:filter .12s ease, opacity .12s ease;
+}
+.diagramCard__diagram .node:hover{filter:drop-shadow(0 6px 10px rgba(16,24,40,.12))}
+.diagramCard__diagram .node.is-selected{filter:drop-shadow(0 8px 14px rgba(99,102,241,.25))}
+.diagramCard__diagram .node.is-selected rect,
+.diagramCard__diagram .node.is-selected polygon,
+.diagramCard__diagram .node.is-selected path{
+  stroke:#6366f1 !important;
+  stroke-width:2px !important;
+}
+
+.diagramCard__nodeInfo{
+  border-top:1px solid var(--border);
+  padding:12px 14px;
+  background:#f9fafb;
+}
+.diagramCard__nodeInfo.hidden{display:none}
+.diagramCard__nodeLabel{
+  font-size:12px;
+  color:var(--muted);
+  margin-bottom:8px;
+}
+.diagramCard__nodeText{color:var(--text)}
+.diagramCard__askForm{
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.diagramCard__askInput{
+  flex:1;
+  padding:10px 12px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  outline:none;
+  background:#fff;
+}
+.diagramCard__askInput:focus{
+  border-color:#c7d2fe;
+  box-shadow:0 0 0 4px rgba(99,102,241,.15);
+}
+.diagramCard__askBtn{
+  padding:10px 14px;
+  border-radius:10px;
+  border:1px solid rgba(0,0,0,.25);
+  background:var(--btn);
+  color:var(--btnText);
+  cursor:pointer;
+  white-space:nowrap;
+}
+.diagramCard__askBtn:disabled{opacity:.6;cursor:not-allowed}
+.diagramCard__drillLoading{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-top:10px;
+  color:var(--muted);
+  font-size:13px;
+}
+.diagramCard__drillLoading.hidden{display:none}
+.diagramCard__drillError{
+  margin-top:10px;
+  padding:10px 12px;
+  border:1px solid #fecaca;
+  border-radius:10px;
+  background:var(--dangerBg);
+  color:var(--danger);
+  font-size:13px;
+}
+.diagramCard__drillError.hidden{display:none}
+
+.diagramCard__code{
+  border-top:1px solid var(--border);
+}
+.diagramCard__codeSummary{
+  cursor:pointer;
+  padding:10px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  user-select:none;
+  font-weight:700;
+  font-size:13px;
+}
+.diagramCard__codeHint{font-weight:500;color:var(--muted);font-size:12px}
+.diagramCard__codeBody{padding:0 14px 14px}
+.diagramCard__codeToolbar{
+  display:flex;gap:8px;justify-content:flex-end;
+  padding:0 14px 8px;
 }
 
 .loading{
@@ -186,8 +407,11 @@ button,input{font:inherit}
   align-items:center;
   gap:10px;
   padding:12px 14px;
-  border-bottom:1px solid var(--border);
-  background:linear-gradient(90deg,#fff,#fafafa);
+  margin-bottom:10px;
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:12px;
+  box-shadow:var(--shadow);
 }
 .spinner{
   width:18px;height:18px;border-radius:50%;
@@ -201,157 +425,14 @@ button,input{font:inherit}
 
 .error{
   padding:12px 14px;
-  border-bottom:1px solid #fecaca;
-  background:var(--dangerBg);
-  color:var(--danger);
-  font-size:13px;
-}
-
-.diagramWrap{
-  padding:14px;
-  background:
-    radial-gradient(circle at 1px 1px, rgba(16,24,40,.08) 1px, transparent 0) 0 0/18px 18px;
-}
-.diagram{
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:14px;
-  min-height:360px;
-  overflow:auto;
-}
-.diagram svg{
-  max-width:100%;
-  height:auto;
-  display:block;
-}
-.diagram .node text,
-.diagram .label text{
-  font-size:14px;
-}
-
-.code{
-  border-top:1px solid var(--border);
-}
-.drill{
-  border-top:1px solid var(--border);
-}
-.drill__summary{
-  cursor:pointer;
-  padding:12px 14px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  user-select:none;
-  font-weight:800;
-}
-.drill__summaryHint{font-weight:500;color:var(--muted);font-size:12px}
-.drill__body{padding:0 14px 14px}
-.drill__row{
-  display:grid;
-  grid-template-columns: 140px 1fr;
-  gap:10px;
-  align-items:center;
-  padding:8px 0 12px;
-}
-.drill__label{font-size:12px;font-weight:700;color:var(--muted)}
-.drill__value{
-  font-size:13px;
-  padding:8px 10px;
-  border:1px solid var(--border);
-  border-radius:10px;
-  background:#fff;
-}
-.drill__form{display:block}
-.drill__inputRow{display:flex;gap:10px;align-items:center;margin-top:8px}
-.drill__input{
-  flex:1;
-  padding:10px 12px;
-  border-radius:10px;
-  border:1px solid var(--border);
-  outline:none;
-}
-.drill__input:focus{border-color:#c7d2fe; box-shadow:0 0 0 4px rgba(99,102,241,.15)}
-.drill__btn{
-  padding:10px 14px;
-  border-radius:10px;
-  border:1px solid rgba(0,0,0,.25);
-  background:var(--btn);
-  color:var(--btnText);
-  cursor:pointer;
-  white-space:nowrap;
-}
-.drill__btn:disabled{opacity:.6;cursor:not-allowed}
-.drill__loading{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  margin-top:10px;
-  color:var(--muted);
-  font-size:13px;
-}
-.drill__error{
-  margin-top:10px;
-  padding:10px 12px;
+  margin-bottom:10px;
   border:1px solid #fecaca;
-  border-radius:10px;
+  border-radius:12px;
   background:var(--dangerBg);
   color:var(--danger);
   font-size:13px;
 }
-.drill__answerWrap{margin-top:12px}
-.drill__diagramWrap{
-  margin-top:8px;
-  padding:12px;
-  border:1px solid var(--border);
-  border-radius:12px;
-  background:
-    radial-gradient(circle at 1px 1px, rgba(16,24,40,.08) 1px, transparent 0) 0 0/18px 18px;
-}
-.drill__diagram{
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:12px;
-  min-height:220px;
-  overflow:auto;
-}
-.drill__diagram svg{max-width:100%;height:auto;display:block}
-.drill__code{margin-top:10px}
-.drill__codeSummary{
-  cursor:pointer;
-  padding:10px 2px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  user-select:none;
-  font-weight:700;
-}
 
-.diagram .node{transition:filter .12s ease, opacity .12s ease}
-.diagram .node:hover{filter:drop-shadow(0 6px 10px rgba(16,24,40,.12))}
-.diagram .node.is-selected{filter:drop-shadow(0 8px 14px rgba(99,102,241,.25))}
-.diagram .node.is-selected rect,
-.diagram .node.is-selected polygon,
-.diagram .node.is-selected path{
-  stroke:#6366f1 !important;
-  stroke-width:2px !important;
-}
-.code__summary{
-  cursor:pointer;
-  padding:12px 14px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  user-select:none;
-  font-weight:700;
-}
-.code__summaryHint{font-weight:500;color:var(--muted);font-size:12px}
-.code__body{padding:0 14px 14px}
-.code__toolbar{display:flex;gap:10px;justify-content:flex-end;padding:0 0 10px}
 .btn{
   border:1px solid var(--border);
   background:#fff;
@@ -402,7 +483,6 @@ button,input{font:inherit}
   .search__row{flex-direction:column;align-items:stretch}
   .search__btn{width:100%}
   .brand__text{font-size:14px}
-  .drill__row{grid-template-columns: 1fr}
-  .drill__inputRow{flex-direction:column;align-items:stretch}
-  .drill__btn{width:100%}
+  .diagramCard__askForm{flex-direction:column;align-items:stretch}
+  .diagramCard__askBtn{width:100%}
 }

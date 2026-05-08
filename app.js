@@ -472,6 +472,13 @@ function bindCardNodeClicks(card) {
   });
 }
 
+function suggestedQuestionFor(label) {
+  // User-friendly natural-language prefill. No Mermaid rules, syntax
+  // constraints, or internal prompt instructions are ever exposed here —
+  // all of that lives in callClaudeForDrilldown's `system` field.
+  return `Show me a detailed diagram of "${label}"`;
+}
+
 function selectCardNode(card, label, nodeEl) {
   card.selectedNode = { label, el: nodeEl };
 
@@ -489,7 +496,26 @@ function selectCardNode(card, label, nodeEl) {
 
   const input = card.element.querySelector(".diagramCard__askInput");
   input.placeholder = `Ask about "${truncate(label, 60)}"…`;
-  input.focus();
+  // Always overwrite with a fresh contextual question. Switching to a new
+  // node should obviously change the suggested question — leaving the old
+  // node's text in here makes the drill-down feel broken.
+  input.value = suggestedQuestionFor(label);
+
+  // Reveal the ask form smoothly if it's currently scrolled out of view.
+  // `block: "nearest"` only scrolls when the form isn't already visible.
+  nodeInfo.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  // `preventScroll: true` keeps the smooth scroll above from being interrupted.
+  try {
+    input.focus({ preventScroll: true });
+  } catch {
+    input.focus();
+  }
+  // Place the caret at the end so users can keep typing or just press Ask.
+  const len = input.value.length;
+  if (typeof input.setSelectionRange === "function") {
+    input.setSelectionRange(len, len);
+  }
 }
 
 // Initial-render constants. Readability over fit: tall diagrams keep their
@@ -583,12 +609,22 @@ function setupZoomPan(card) {
 
   // Display the visual scale (initialScale × user zoom). svg-pan-zoom's
   // logical zoom starts at 1.0 because the SVG is already rendered at
-  // initialScale pixels.
+  // initialScale pixels. Use card.initialScale so the label stays correct
+  // after a resize-driven re-layout.
   const updateLabel = (userZoom) => {
-    if (zoomLabel) {
-      zoomLabel.textContent = `${Math.round(layout.initialScale * userZoom * 100)}%`;
-    }
+    if (!zoomLabel) return;
+    const scale = card.initialScale || 1;
+    zoomLabel.textContent = `${Math.round(scale * userZoom * 100)}%`;
   };
+
+  // Map user-facing visual scale bounds (25% – 500%) to svg-pan-zoom's logical
+  // zoom range. This guarantees users can always zoom out to ~25% of natural
+  // and zoom in to ~500%, regardless of how aggressive the readable initial
+  // scale was.
+  const VISUAL_MIN = 0.25;
+  const VISUAL_MAX = 5;
+  const minLogicalZoom = Math.min(0.2, VISUAL_MIN / layout.initialScale);
+  const maxLogicalZoom = Math.max(8, VISUAL_MAX / layout.initialScale);
 
   const inst = svgPanZoom(svgEl, {
     zoomEnabled: true,
@@ -598,8 +634,8 @@ function setupZoomPan(card) {
     fit: false,
     center: false,
     contain: false,
-    minZoom: 0.2,
-    maxZoom: 8,
+    minZoom: minLogicalZoom,
+    maxZoom: maxLogicalZoom,
     zoomScaleSensitivity: 0.25,
     dblClickZoomEnabled: false,
     mouseWheelZoomEnabled: true,
@@ -613,10 +649,18 @@ function setupZoomPan(card) {
   btnIn.addEventListener("click", () => inst.zoomIn());
   btnOut.addEventListener("click", () => inst.zoomOut());
   btnReset.addEventListener("click", () => {
-    // Restore the original readable view: scale 1.0 (which is initialScale in
-    // pixels) and zero pan offset. This recreates the "Miro-style" landing.
-    inst.resetZoom();
-    inst.pan({ x: 0, y: 0 });
+    // Recompute the readability-first scale (in case the window has been
+    // resized since this card rendered), then reset user zoom and pan.
+    try {
+      const next = computeReadableLayout(svgEl, viewport);
+      applyReadableLayout(svgEl, viewport, next);
+      card.initialScale = next.initialScale;
+      inst.resize();
+      inst.resetZoom();
+      inst.pan({ x: 0, y: 0 });
+    } catch {
+      // ignore
+    }
     updateLabel(1);
   });
 

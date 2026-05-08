@@ -248,92 +248,145 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
   card.dataset.depth = String(depth);
 
   const isRoot = !parentCardId;
-  const depthLabel = isRoot ? `Root · Depth ${depth}` : `Depth ${depth}`;
-  const depthClass = isRoot ? "diagramCard__depth diagramCard__depth--root" : "diagramCard__depth";
+  const depthLabel = isRoot ? `Root · L${depth}` : `L${depth}`;
 
   card.innerHTML = `
     <header class="diagramCard__header">
-      <div class="diagramCard__badges">
-        <span class="${depthClass}">${depthLabel}</span>
+      <div class="diagramCard__topRow">
+        <span class="diagramCard__depth">${depthLabel}</span>
         <span class="diagramCard__time" title="${timestamp.toISOString()}">${formatTime(timestamp)}</span>
+        <span class="diagramCard__headerSpacer"></span>
+        <button class="diagramCard__iconBtn diagramCard__minimize" type="button" title="Collapse / expand" aria-label="Collapse">−</button>
+        <button class="diagramCard__iconBtn diagramCard__remove" type="button" title="Remove this diagram" aria-label="Remove">×</button>
       </div>
-      <div class="diagramCard__titleRow">
-        <div class="diagramCard__title"></div>
-        <button class="diagramCard__remove" type="button" title="Remove this diagram" aria-label="Remove this diagram">×</button>
-      </div>
-      <div class="diagramCard__parent"></div>
+      <div class="diagramCard__title"></div>
+      <div class="diagramCard__breadcrumb"></div>
     </header>
 
-    <div class="diagramCard__diagramWrap">
-      <div class="diagramCard__diagram" aria-label="Rendered diagram"></div>
-    </div>
+    <div class="diagramCard__body">
+      <div class="diagramCard__diagramWrap">
+        <div class="diagramCard__diagramControls" role="toolbar" aria-label="Zoom controls">
+          <button type="button" class="diagramCard__zoomBtn diagramCard__zoomOut" title="Zoom out (Ctrl+−)" aria-label="Zoom out">−</button>
+          <span class="diagramCard__zoomLabel">100%</span>
+          <button type="button" class="diagramCard__zoomBtn diagramCard__zoomIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in">+</button>
+          <button type="button" class="diagramCard__zoomBtn diagramCard__zoomReset" title="Reset zoom" aria-label="Reset zoom">⤢</button>
+        </div>
+        <div class="diagramCard__diagram" aria-label="Rendered diagram">
+          <div class="diagramCard__pan"></div>
+        </div>
+      </div>
 
-    <div class="diagramCard__nodeInfo hidden">
-      <div class="diagramCard__nodeLabel">
-        Selected node: <strong class="diagramCard__nodeText"></strong>
+      <div class="diagramCard__nodeInfo hidden">
+        <div class="diagramCard__nodeLabel">
+          Selected: <strong class="diagramCard__nodeText"></strong>
+        </div>
+        <form class="diagramCard__askForm" autocomplete="off">
+          <input
+            class="diagramCard__askInput"
+            type="text"
+            placeholder="Ask a question about this node…"
+            required
+          />
+          <button type="submit" class="diagramCard__askBtn">Ask</button>
+        </form>
+        <div class="diagramCard__drillLoading hidden" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div>
+          <div>Thinking…</div>
+        </div>
+        <div class="diagramCard__drillError hidden" role="alert"></div>
       </div>
-      <form class="diagramCard__askForm" autocomplete="off">
-        <input
-          class="diagramCard__askInput"
-          type="text"
-          placeholder='e.g. "Explain this step in more detail"'
-          required
-        />
-        <button type="submit" class="diagramCard__askBtn">Ask</button>
-      </form>
-      <div class="diagramCard__drillLoading hidden" aria-live="polite">
-        <div class="spinner" aria-hidden="true"></div>
-        <div>Thinking…</div>
-      </div>
-      <div class="diagramCard__drillError hidden" role="alert"></div>
-    </div>
 
-    <details class="diagramCard__code" open>
-      <summary class="diagramCard__codeSummary">
-        <span>Mermaid code</span>
-        <span class="diagramCard__codeHint">click to collapse</span>
-      </summary>
-      <div class="diagramCard__codeToolbar">
-        <button type="button" class="btn diagramCard__copy">Copy</button>
-      </div>
-      <div class="diagramCard__codeBody">
-        <pre class="code__pre"><code class="code__code diagramCard__codeBlock"></code></pre>
-      </div>
-    </details>
+      <details class="diagramCard__code">
+        <summary class="diagramCard__codeSummary">
+          <span>Mermaid code</span>
+          <span class="diagramCard__codeHint">expand</span>
+        </summary>
+        <div class="diagramCard__codeToolbar">
+          <button type="button" class="btn diagramCard__copy">Copy</button>
+        </div>
+        <div class="diagramCard__codeBody">
+          <pre class="code__pre"><code class="code__code diagramCard__codeBlock"></code></pre>
+        </div>
+      </details>
+    </div>
   `;
 
-  card.querySelector(".diagramCard__title").textContent = title || (isRoot ? "Diagram" : "Sub-diagram");
-
-  const parentEl = card.querySelector(".diagramCard__parent");
-  if (parentCardId && parentLabel) {
-    const parentCard = history.find((c) => c.id === parentCardId);
-    const fromLabel = parentCard ? truncate(parentCard.title, 60) : "previous diagram";
-    parentEl.innerHTML = `From <strong>${escapeHtml(fromLabel)}</strong> → node <strong>${escapeHtml(parentLabel)}</strong>`;
-  } else {
-    parentEl.textContent = "Top-level diagram from your prompt.";
-  }
+  const finalTitle = title || (isRoot ? "Diagram" : "Sub-diagram");
+  card.querySelector(".diagramCard__title").textContent = finalTitle;
 
   const meta = {
     id,
     depth,
-    title,
+    title: finalTitle,
     parentLabel,
     parentCardId,
     timestamp,
     mermaidCode: "",
     element: card,
     selectedNode: { label: "", el: null },
+    suppressClickUntil: 0,
+    viewport: null,
   };
 
+  history.push(meta);
+  renderBreadcrumb(meta);
+
   card.querySelector(".diagramCard__remove").addEventListener("click", () => removeCard(id));
+  card.querySelector(".diagramCard__minimize").addEventListener("click", () => toggleCardMinimize(meta));
   card.querySelector(".diagramCard__copy").addEventListener("click", (e) => copyCardCode(meta, e.currentTarget));
   card.querySelector(".diagramCard__askForm").addEventListener("submit", (e) => onAskFromCard(e, meta));
 
-  history.push(meta);
   el.history.appendChild(card);
   updateHistoryUi();
 
   return meta;
+}
+
+function getAncestorPath(card) {
+  const path = [];
+  let cur = card;
+  let guard = 0;
+  while (cur && guard++ < 40) {
+    path.unshift(cur);
+    cur = cur.parentCardId ? history.find((c) => c.id === cur.parentCardId) : null;
+  }
+  return path;
+}
+
+function renderBreadcrumb(card) {
+  const wrap = card.element.querySelector(".diagramCard__breadcrumb");
+  if (!wrap) return;
+  const path = getAncestorPath(card);
+  wrap.innerHTML = "";
+  path.forEach((node, idx) => {
+    if (idx > 0) {
+      const sep = document.createElement("span");
+      sep.className = "diagramCard__crumbSep";
+      sep.textContent = "›";
+      wrap.appendChild(sep);
+    }
+    const isCurrent = node.id === card.id;
+    const crumb = document.createElement("button");
+    crumb.type = "button";
+    crumb.className = "diagramCard__crumb" + (isCurrent ? " diagramCard__crumb--current" : "");
+    crumb.textContent = truncate(node.title, 40);
+    crumb.title = node.title;
+    if (!isCurrent) {
+      crumb.addEventListener("click", () => {
+        node.element.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } else {
+      crumb.disabled = true;
+    }
+    wrap.appendChild(crumb);
+  });
+}
+
+function toggleCardMinimize(card) {
+  const collapsed = card.element.classList.toggle("is-collapsed");
+  const btn = card.element.querySelector(".diagramCard__minimize");
+  btn.textContent = collapsed ? "+" : "−";
+  btn.title = collapsed ? "Expand" : "Collapse";
 }
 
 function escapeHtml(s) {
@@ -351,6 +404,7 @@ function removeCard(cardId) {
   const card = history[idx];
   card.element.remove();
   history.splice(idx, 1);
+  for (const c of history) renderBreadcrumb(c);
   updateHistoryUi();
 }
 
@@ -398,6 +452,8 @@ function bindCardNodeClicks(card) {
     node.setAttribute("role", "button");
 
     const onPick = (ev) => {
+      // Ignore click that follows a pan drag.
+      if (Date.now() < (card.suppressClickUntil || 0)) return;
       ev.preventDefault();
       ev.stopPropagation();
       const label = getNodeLabel(node);
@@ -427,11 +483,128 @@ function selectCardNode(card, label, nodeEl) {
   errEl.textContent = "";
 
   const input = card.element.querySelector(".diagramCard__askInput");
-  if (!input.value.trim()) {
-    input.value = `Explain "${label}" in more detail with a step-by-step flowchart.`;
-  }
+  input.placeholder = `Ask about "${truncate(label, 60)}"…`;
   input.focus();
-  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function setupZoomPan(card) {
+  const viewport = card.element.querySelector(".diagramCard__diagram");
+  const pan = card.element.querySelector(".diagramCard__pan");
+  const zoomLabel = card.element.querySelector(".diagramCard__zoomLabel");
+  const btnIn = card.element.querySelector(".diagramCard__zoomIn");
+  const btnOut = card.element.querySelector(".diagramCard__zoomOut");
+  const btnReset = card.element.querySelector(".diagramCard__zoomReset");
+
+  const state = { scale: 1, tx: 0, ty: 0 };
+  const MIN = 0.2;
+  const MAX = 5;
+
+  const apply = () => {
+    pan.style.transform = `translate(${state.tx}px, ${state.ty}px) scale(${state.scale})`;
+    if (zoomLabel) zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
+  };
+
+  const measureNatural = () => {
+    const svgEl = pan.querySelector("svg");
+    if (!svgEl) return { w: 0, h: 0 };
+    // Prefer viewBox so we get the diagram's natural drawing size, regardless of any inline transform.
+    const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+    if (vb && vb.width > 0 && vb.height > 0) return { w: vb.width, h: vb.height };
+    // Fall back to a transform-free measurement.
+    const prev = pan.style.transform;
+    pan.style.transform = "none";
+    const r = svgEl.getBoundingClientRect();
+    pan.style.transform = prev;
+    return { w: r.width, h: r.height };
+  };
+
+  const setScale = (next, cx, cy) => {
+    const clamped = Math.max(MIN, Math.min(MAX, next));
+    if (clamped === state.scale) return;
+    const rect = viewport.getBoundingClientRect();
+    const px = cx != null ? cx - rect.left : rect.width / 2;
+    const py = cy != null ? cy - rect.top : rect.height / 2;
+    state.tx = px - (px - state.tx) * (clamped / state.scale);
+    state.ty = py - (py - state.ty) * (clamped / state.scale);
+    state.scale = clamped;
+    apply();
+  };
+
+  const fit = () => {
+    const vRect = viewport.getBoundingClientRect();
+    const nat = measureNatural();
+    if (!nat.w || !nat.h || !vRect.width || !vRect.height) {
+      state.scale = 1;
+      state.tx = 0;
+      state.ty = 0;
+      apply();
+      return;
+    }
+    const pad = 16;
+    const fitScale = Math.min(
+      (vRect.width - pad * 2) / nat.w,
+      (vRect.height - pad * 2) / nat.h,
+      1.0,
+    );
+    const scale = Math.max(MIN, Math.min(MAX, fitScale));
+    state.scale = scale;
+    state.tx = Math.round((vRect.width - nat.w * scale) / 2);
+    state.ty = Math.round((vRect.height - nat.h * scale) / 2);
+    apply();
+  };
+
+  btnIn.addEventListener("click", () => setScale(state.scale * 1.2));
+  btnOut.addEventListener("click", () => setScale(state.scale / 1.2));
+  btnReset.addEventListener("click", fit);
+
+  viewport.addEventListener(
+    "wheel",
+    (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setScale(state.scale * factor, e.clientX, e.clientY);
+    },
+    { passive: false },
+  );
+
+  viewport.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest && e.target.closest(".node")) return;
+    e.preventDefault();
+
+    let lastX = e.clientX;
+    let lastY = e.clientY;
+    let moved = 0;
+    viewport.classList.add("is-panning");
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - lastX;
+      const dy = ev.clientY - lastY;
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+      state.tx += dx;
+      state.ty += dy;
+      moved += Math.abs(dx) + Math.abs(dy);
+      apply();
+    };
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      viewport.classList.remove("is-panning");
+      if (moved > 4) card.suppressClickUntil = Date.now() + 150;
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  card.viewport = { fit, setScale };
+
+  // Initial layout: fit-to-viewport so the diagram is centered and fully visible.
+  // Wait one frame so the SVG is laid out before we measure.
+  requestAnimationFrame(() => fit());
 }
 
 async function renderCardDiagram(card, code) {
@@ -441,16 +614,25 @@ async function renderCardDiagram(card, code) {
   const codeBlock = card.element.querySelector(".diagramCard__codeBlock");
   codeBlock.textContent = clean;
 
-  const diagram = card.element.querySelector(".diagramCard__diagram");
-  diagram.innerHTML = "";
+  const pan = card.element.querySelector(".diagramCard__pan");
+  pan.innerHTML = "";
   const renderId = `mmd-${card.id}-${Math.random().toString(16).slice(2)}`;
 
   try {
     const { svg } = await mermaid.render(renderId, clean);
-    diagram.innerHTML = svg;
+    pan.innerHTML = svg;
+    // Let the SVG size itself naturally; CSS handles container sizing.
+    const svgEl = pan.querySelector("svg");
+    if (svgEl) {
+      svgEl.removeAttribute("width");
+      svgEl.removeAttribute("height");
+      svgEl.style.maxWidth = "none";
+      svgEl.style.height = "auto";
+    }
     bindCardNodeClicks(card);
+    setupZoomPan(card);
   } catch (e) {
-    diagram.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
+    pan.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
       Mermaid render error. Check the code below.
     </div>`;
     throw new Error(`Mermaid render error: ${e?.message || String(e)}`);
@@ -563,10 +745,18 @@ function initMermaid() {
     securityLevel: "strict",
     theme: "default",
     flowchart: {
-      curve: "linear",
-      nodeSpacing: 35,
-      rankSpacing: 55,
+      curve: "basis",
+      useMaxWidth: false,
+      htmlLabels: true,
+      nodeSpacing: 40,
+      rankSpacing: 50,
     },
+    sequence: { useMaxWidth: false },
+    gantt: { useMaxWidth: false },
+    journey: { useMaxWidth: false },
+    class: { useMaxWidth: false },
+    state: { useMaxWidth: false },
+    er: { useMaxWidth: false },
   });
 }
 

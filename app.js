@@ -1,4 +1,4 @@
-/* global mermaid, svgPanZoom */
+/* global mermaid */
 
 const ANTHROPIC_ENDPOINT = "/api/messages";
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
@@ -518,195 +518,160 @@ function selectCardNode(card, label, nodeEl) {
   }
 }
 
-// Initial-render constants. Readability over fit: tall diagrams keep their
-// scale and grow the card downward instead of being squished into the viewport.
+// Readability-first layout constants. Tall diagrams keep their scale and
+// grow the card downward instead of being squished into a fixed viewport.
 const READABLE_MIN_SCALE = 0.85;
 const READABLE_MAX_SCALE = 1.4;
-const DIAGRAM_PAD_X = 24;
-const DIAGRAM_PAD_Y = 24;
+const DIAGRAM_PAD = 24;
 const DIAGRAM_MIN_HEIGHT = 280;
+const ZOOM_STEP = 1.2;
+const MIN_ZOOM = 0.15; // user multiplier; with initialScale=1.4 → ~21% display
+const MAX_ZOOM = 8; // user multiplier; with initialScale=1.4 → ~1120% display
 
-function computeReadableLayout(svgEl, viewport) {
-  const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
-  const vbW = (vb && vb.width) || 800;
-  const vbH = (vb && vb.height) || 600;
-
-  // Available width inside the diagram viewport, minus a comfortable side padding.
-  const containerW = Math.max(360, viewport.clientWidth || 800);
-  const widthFit = (containerW - DIAGRAM_PAD_X * 2) / vbW;
-
-  // Width-only fit, clamped so diagrams stay readable. Height is intentionally
-  // not part of the calculation — tall graphs extend downward instead.
-  const initialScale = Math.min(READABLE_MAX_SCALE, Math.max(READABLE_MIN_SCALE, widthFit));
-
-  return {
-    vbW,
-    vbH,
-    initialScale,
-    scaledW: vbW * initialScale,
-    scaledH: vbH * initialScale,
-  };
+function applyTransform(card) {
+  const pan = card.element && card.element.querySelector(".diagramCard__pan");
+  if (!pan) return;
+  const totalScale = (card.initialScale || 1) * (card.zoom || 1);
+  const tx = card.panX || 0;
+  const ty = card.panY || 0;
+  pan.style.transform = `translate(${tx}px, ${ty}px) scale(${totalScale})`;
+  const lbl = card.element.querySelector(".diagramCard__zoomLabel");
+  if (lbl) lbl.textContent = `${Math.round(totalScale * 100)}%`;
 }
 
-function applyReadableLayout(svgEl, viewport, layout) {
-  // The SVG is rendered at exactly the chosen pixel scale. svg-pan-zoom will
-  // treat this as the natural state (zoom 1.0), and any user zoom multiplies
-  // on top of it.
-  const w = Math.round(layout.scaledW);
-  const h = Math.round(layout.scaledH);
-  svgEl.setAttribute("width", String(w));
-  svgEl.setAttribute("height", String(h));
-  svgEl.style.width = `${w}px`;
-  svgEl.style.height = `${h}px`;
-  svgEl.style.maxWidth = "100%";
-  svgEl.style.display = "block";
-  svgEl.removeAttribute("preserveAspectRatio");
+function applyReadableInitialView(card) {
+  const viewport = card.element.querySelector(".diagramCard__diagram");
+  if (!viewport || !card.viewBoxW || !card.viewBoxH) return;
+
+  const containerW = Math.max(360, viewport.clientWidth || 800);
+  const widthFit = (containerW - DIAGRAM_PAD * 2) / card.viewBoxW;
+  const initialScale = Math.min(
+    READABLE_MAX_SCALE,
+    Math.max(READABLE_MIN_SCALE, widthFit),
+  );
+
+  card.initialScale = initialScale;
+  card.zoom = 1;
+
+  const scaledW = card.viewBoxW * initialScale;
+  card.panX = Math.max(DIAGRAM_PAD, (containerW - scaledW) / 2);
+  card.panY = DIAGRAM_PAD;
 
   // Grow the viewport to host the scaled diagram + padding. Tall diagrams
-  // expand the card downward so the page (not the diagram) becomes scrollable.
-  const targetVpH = Math.max(DIAGRAM_MIN_HEIGHT, h + DIAGRAM_PAD_Y * 2);
-  viewport.style.height = `${targetVpH}px`;
+  // extend the card downward so the page (not the diagram) becomes scrollable.
+  const scaledH = card.viewBoxH * initialScale;
+  viewport.style.height = `${Math.max(DIAGRAM_MIN_HEIGHT, scaledH + DIAGRAM_PAD * 2)}px`;
+
+  applyTransform(card);
 }
 
 function setupZoomPan(card) {
   const viewport = card.element.querySelector(".diagramCard__diagram");
   const pan = card.element.querySelector(".diagramCard__pan");
   const svgEl = pan && pan.querySelector("svg");
-  const zoomLabel = card.element.querySelector(".diagramCard__zoomLabel");
   const btnIn = card.element.querySelector(".diagramCard__zoomIn");
   const btnOut = card.element.querySelector(".diagramCard__zoomOut");
   const btnReset = card.element.querySelector(".diagramCard__zoomReset");
-  if (!svgEl) return;
+  if (!svgEl || !viewport || !pan) return;
 
-  const layout = computeReadableLayout(svgEl, viewport);
-  applyReadableLayout(svgEl, viewport, layout);
-  card.initialScale = layout.initialScale;
+  // Read the diagram's natural drawing dimensions from Mermaid's viewBox.
+  const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+  const vbW = (vb && vb.width) || 800;
+  const vbH = (vb && vb.height) || 600;
+  card.viewBoxW = vbW;
+  card.viewBoxH = vbH;
 
-  // Track drag distance so a click-after-drag does not also select a node.
-  let downAt = null;
+  // Render the SVG at its natural pixel size. CSS transform on the pan layer
+  // is the single source of truth for visible scale and pan offset.
+  svgEl.setAttribute("width", String(vbW));
+  svgEl.setAttribute("height", String(vbH));
+  svgEl.style.width = `${vbW}px`;
+  svgEl.style.height = `${vbH}px`;
+  svgEl.style.maxWidth = "none";
+  svgEl.style.display = "block";
+  svgEl.removeAttribute("preserveAspectRatio");
+
+  pan.style.transformOrigin = "0 0";
+  pan.style.willChange = "transform";
+
+  applyReadableInitialView(card);
+
+  // Zoom around an arbitrary point (kept stationary in viewport coords).
+  const setZoomAround = (newZoom, cx, cy) => {
+    const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+    if (clamped === card.zoom) return;
+    const r = clamped / card.zoom;
+    if (cx != null && cy != null) {
+      const rect = viewport.getBoundingClientRect();
+      const px = cx - rect.left;
+      const py = cy - rect.top;
+      // Keep (px, py) in viewport space stationary across the scale change.
+      card.panX = card.panX * r + px * (1 - r);
+      card.panY = card.panY * r + py * (1 - r);
+    }
+    card.zoom = clamped;
+    applyTransform(card);
+  };
+  const zoomFromCenter = (factor) => {
+    const rect = viewport.getBoundingClientRect();
+    setZoomAround(card.zoom * factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  };
+
+  if (btnIn) btnIn.addEventListener("click", () => zoomFromCenter(ZOOM_STEP));
+  if (btnOut) btnOut.addEventListener("click", () => zoomFromCenter(1 / ZOOM_STEP));
+  if (btnReset) btnReset.addEventListener("click", () => applyReadableInitialView(card));
+
+  // Wheel zoom — Ctrl/Meta required so plain wheel still scrolls the page.
+  const onWheel = (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    setZoomAround(card.zoom * factor, e.clientX, e.clientY);
+  };
+  viewport.addEventListener("wheel", onWheel, { passive: false });
+  card._onWheel = onWheel;
+
+  // Drag-to-pan. Movement >4 px sets `suppressClickUntil` so the post-drag
+  // click on a node is ignored.
   const onMouseDown = (e) => {
-    downAt = { x: e.clientX, y: e.clientY };
+    if (e.button !== 0) return;
+    // Only preventDefault on background drags to keep node focus working.
+    if (!e.target.closest || !e.target.closest(".node")) e.preventDefault();
+    let lastX = e.clientX;
+    let lastY = e.clientY;
+    let moved = 0;
     viewport.classList.add("is-panning");
-  };
-  const onMouseMove = (e) => {
-    if (!downAt) return;
-    const d = Math.abs(e.clientX - downAt.x) + Math.abs(e.clientY - downAt.y);
-    if (d > 4) card.suppressClickUntil = Date.now() + 200;
-  };
-  const onMouseUp = () => {
-    downAt = null;
-    viewport.classList.remove("is-panning");
+    const onMove = (ev) => {
+      const dx = ev.clientX - lastX;
+      const dy = ev.clientY - lastY;
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+      card.panX += dx;
+      card.panY += dy;
+      moved += Math.abs(dx) + Math.abs(dy);
+      if (moved > 4) card.suppressClickUntil = Date.now() + 200;
+      applyTransform(card);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      viewport.classList.remove("is-panning");
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   };
   viewport.addEventListener("mousedown", onMouseDown);
-  document.addEventListener("mousemove", onMouseMove);
-  document.addEventListener("mouseup", onMouseUp);
-  card._panTracking = { onMouseDown, onMouseMove, onMouseUp };
-
-  if (typeof svgPanZoom === "undefined") {
-    if (zoomLabel) zoomLabel.textContent = `${Math.round(layout.initialScale * 100)}%`;
-    return;
-  }
-
-  // Display the visual scale (initialScale × user zoom). svg-pan-zoom's
-  // logical zoom starts at 1.0 because the SVG is already rendered at
-  // initialScale pixels. Use card.initialScale so the label stays correct
-  // after a resize-driven re-layout.
-  const updateLabel = (userZoom) => {
-    if (!zoomLabel) return;
-    const scale = card.initialScale || 1;
-    zoomLabel.textContent = `${Math.round(scale * userZoom * 100)}%`;
-  };
-
-  // Map user-facing visual scale bounds (25% – 500%) to svg-pan-zoom's logical
-  // zoom range. This guarantees users can always zoom out to ~25% of natural
-  // and zoom in to ~500%, regardless of how aggressive the readable initial
-  // scale was.
-  const VISUAL_MIN = 0.25;
-  const VISUAL_MAX = 5;
-  const minLogicalZoom = Math.min(0.2, VISUAL_MIN / layout.initialScale);
-  const maxLogicalZoom = Math.max(8, VISUAL_MAX / layout.initialScale);
-
-  const inst = svgPanZoom(svgEl, {
-    zoomEnabled: true,
-    panEnabled: true,
-    controlIconsEnabled: false,
-    // Do NOT fit/center on init — we want our readability-first scale to win.
-    fit: false,
-    center: false,
-    contain: false,
-    minZoom: minLogicalZoom,
-    maxZoom: maxLogicalZoom,
-    zoomScaleSensitivity: 0.25,
-    dblClickZoomEnabled: false,
-    mouseWheelZoomEnabled: true,
-    preventMouseEventsDefault: true,
-    onZoom: updateLabel,
-    onPan: () => {
-      if (downAt) card.suppressClickUntil = Date.now() + 200;
-    },
-  });
-
-  btnIn.addEventListener("click", () => inst.zoomIn());
-  btnOut.addEventListener("click", () => inst.zoomOut());
-  btnReset.addEventListener("click", () => {
-    // Recompute the readability-first scale (in case the window has been
-    // resized since this card rendered), then reset user zoom and pan.
-    try {
-      const next = computeReadableLayout(svgEl, viewport);
-      applyReadableLayout(svgEl, viewport, next);
-      card.initialScale = next.initialScale;
-      inst.resize();
-      inst.resetZoom();
-      inst.pan({ x: 0, y: 0 });
-    } catch {
-      // ignore
-    }
-    updateLabel(1);
-  });
-
-  // Recompute width-fit on container resize so a window resize doesn't leave
-  // diagrams either too cramped or too zoomed out.
-  let resizeRaf = 0;
-  const onResize = () => {
-    cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      try {
-        const next = computeReadableLayout(svgEl, viewport);
-        applyReadableLayout(svgEl, viewport, next);
-        card.initialScale = next.initialScale;
-        inst.resize();
-        // Keep the user's logical zoom factor; only the base pixel size moved.
-        updateLabel(inst.getZoom());
-      } catch {
-        // ignore
-      }
-    });
-  };
-  window.addEventListener("resize", onResize);
-  card._onResize = onResize;
-
-  updateLabel(1);
-  card.viewport = inst;
+  card._onMouseDown = onMouseDown;
 }
 
 function teardownZoomPan(card) {
-  if (card._panTracking) {
-    document.removeEventListener("mousemove", card._panTracking.onMouseMove);
-    document.removeEventListener("mouseup", card._panTracking.onMouseUp);
-    card._panTracking = null;
+  const viewport = card.element && card.element.querySelector(".diagramCard__diagram");
+  if (viewport) {
+    if (card._onWheel) viewport.removeEventListener("wheel", card._onWheel);
+    if (card._onMouseDown) viewport.removeEventListener("mousedown", card._onMouseDown);
   }
-  if (card._onResize) {
-    window.removeEventListener("resize", card._onResize);
-    card._onResize = null;
-  }
-  if (card.viewport && typeof card.viewport.destroy === "function") {
-    try {
-      card.viewport.destroy();
-    } catch {
-      // ignore
-    }
-  }
-  card.viewport = null;
+  card._onWheel = null;
+  card._onMouseDown = null;
 }
 
 async function renderCardDiagram(card, code) {

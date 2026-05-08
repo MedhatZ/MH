@@ -424,28 +424,25 @@ button,input{font:inherit}
   border:1px solid var(--border);
   border-radius:10px;
   min-height:280px;
-  /* Height is set dynamically by setupZoomPan() so tall diagrams extend the
-     card downward naturally instead of being shrunk to fit. */
+  /* Height is set dynamically by applyReadableInitialView() so tall diagrams
+     extend the card downward naturally instead of being shrunk to fit. */
   overflow:hidden;
   position:relative;
   cursor:grab;
   user-select:none;
 }
 .diagramCard__diagram.is-panning{cursor:grabbing}
+/* The pan layer is the single source of truth for zoom + pan. JS applies a
+   CSS transform of `translate(panX, panY) scale(initialScale * zoom)` here. */
 .diagramCard__pan{
-  display:flex;
-  align-items:flex-start;
-  justify-content:center;
-  width:100%;
-  min-height:100%;
-  padding:24px;
+  position:absolute;
+  top:0;
+  left:0;
+  transform-origin:0 0;
+  will-change:transform;
 }
-/* Don't force the SVG to fill the container — JS sets the SVG's pixel
-   dimensions to the readability-first scale, and the pan layer centers it. */
 .diagramCard svg{
   display:block;
-  max-width:100%;
-  height:auto;
 }
 .diagramCard__diagram .node text,
 .diagramCard__diagram .label text{
@@ -706,7 +703,6 @@ button,input{font:inherit}
   .diagramCard__askBtn{width:100%}
   .diagramCard__diagramControls{top:auto;bottom:14px;right:14px}
   .diagramCard__diagram{min-height:240px}
-  .diagramCard__pan{padding:12px}
   .diagramCard[data-depth]{margin-left:0 !important}
   .diagramCard[data-depth]:not([data-depth="1"])::before,
   .diagramCard[data-depth]:not([data-depth="1"])::after{display:none}

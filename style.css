@@ -233,6 +233,94 @@ button,input{font:inherit}
 .code{
   border-top:1px solid var(--border);
 }
+.drill{
+  border-top:1px solid var(--border);
+}
+.drill__summary{
+  cursor:pointer;
+  padding:12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  user-select:none;
+  font-weight:800;
+}
+.drill__summaryHint{font-weight:500;color:var(--muted);font-size:12px}
+.drill__body{padding:0 14px 14px}
+.drill__row{
+  display:grid;
+  grid-template-columns: 140px 1fr;
+  gap:10px;
+  align-items:center;
+  padding:8px 0 12px;
+}
+.drill__label{font-size:12px;font-weight:700;color:var(--muted)}
+.drill__value{
+  font-size:13px;
+  padding:8px 10px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:#fff;
+}
+.drill__form{display:block}
+.drill__inputRow{display:flex;gap:10px;align-items:center;margin-top:8px}
+.drill__input{
+  flex:1;
+  padding:10px 12px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  outline:none;
+}
+.drill__input:focus{border-color:#c7d2fe; box-shadow:0 0 0 4px rgba(99,102,241,.15)}
+.drill__btn{
+  padding:10px 14px;
+  border-radius:10px;
+  border:1px solid rgba(0,0,0,.25);
+  background:var(--btn);
+  color:var(--btnText);
+  cursor:pointer;
+  white-space:nowrap;
+}
+.drill__btn:disabled{opacity:.6;cursor:not-allowed}
+.drill__loading{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-top:10px;
+  color:var(--muted);
+  font-size:13px;
+}
+.drill__error{
+  margin-top:10px;
+  padding:10px 12px;
+  border:1px solid #fecaca;
+  border-radius:10px;
+  background:var(--dangerBg);
+  color:var(--danger);
+  font-size:13px;
+}
+.drill__answerWrap{margin-top:12px}
+.drill__answer{
+  margin-top:8px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:12px;
+  background:#f9fafb;
+  font-size:13px;
+  line-height:1.6;
+  white-space:pre-wrap;
+}
+
+.diagram .node{transition:filter .12s ease, opacity .12s ease}
+.diagram .node:hover{filter:drop-shadow(0 6px 10px rgba(16,24,40,.12))}
+.diagram .node.is-selected{filter:drop-shadow(0 8px 14px rgba(99,102,241,.25))}
+.diagram .node.is-selected rect,
+.diagram .node.is-selected polygon,
+.diagram .node.is-selected path{
+  stroke:#6366f1 !important;
+  stroke-width:2px !important;
+}
 .code__summary{
   cursor:pointer;
   padding:12px 14px;
@@ -296,4 +384,7 @@ button,input{font:inherit}
   .search__row{flex-direction:column;align-items:stretch}
   .search__btn{width:100%}
   .brand__text{font-size:14px}
+  .drill__row{grid-template-columns: 1fr}
+  .drill__inputRow{flex-direction:column;align-items:stretch}
+  .drill__btn{width:100%}
 }

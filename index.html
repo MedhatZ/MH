@@ -90,6 +90,45 @@
               <div id="diagram" class="diagram" aria-label="Rendered diagram"></div>
             </div>
 
+            <details id="drillDetails" class="drill" open>
+              <summary class="drill__summary">
+                <span>Drill‑down (click a node)</span>
+                <span class="drill__summaryHint">interactive learning</span>
+              </summary>
+              <div class="drill__body">
+                <div class="drill__row">
+                  <div class="drill__label">Selected node</div>
+                  <div id="drillNode" class="drill__value">None (click a box in the diagram)</div>
+                </div>
+
+                <form id="drillForm" class="drill__form" autocomplete="off">
+                  <label class="drill__label" for="drillQuestion">Ask a question</label>
+                  <div class="drill__inputRow">
+                    <input
+                      id="drillQuestion"
+                      class="drill__input"
+                      type="text"
+                      placeholder='e.g. "How do you request landing clearance?"'
+                      required
+                    />
+                    <button id="btnAsk" class="drill__btn" type="submit">Ask</button>
+                  </div>
+                  <div id="drillLoading" class="drill__loading hidden" aria-live="polite">
+                    <div class="spinner" aria-hidden="true"></div>
+                    <div>Thinking…</div>
+                  </div>
+                  <div id="drillError" class="drill__error hidden" role="alert"></div>
+                </form>
+
+                <div class="drill__answerWrap">
+                  <div class="drill__label">Answer</div>
+                  <div id="drillAnswer" class="drill__answer">
+                    Click a node to start exploring step‑by‑step.
+                  </div>
+                </div>
+              </div>
+            </details>
+
             <details id="codeDetails" class="code" open>
               <summary class="code__summary">
                 <span>Mermaid code</span>

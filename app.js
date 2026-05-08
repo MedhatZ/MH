@@ -38,7 +38,19 @@ const el = {
   codeBlock: document.getElementById("codeBlock"),
   btnCopy: document.getElementById("btnCopy"),
   btnFormat: document.getElementById("btnFormat"),
+
+  drillDetails: document.getElementById("drillDetails"),
+  drillForm: document.getElementById("drillForm"),
+  drillNode: document.getElementById("drillNode"),
+  drillQuestion: document.getElementById("drillQuestion"),
+  drillAnswer: document.getElementById("drillAnswer"),
+  drillLoading: document.getElementById("drillLoading"),
+  drillError: document.getElementById("drillError"),
+  btnAsk: document.getElementById("btnAsk"),
 };
+
+let lastMermaidCode = "";
+let selectedNodeLabel = "";
 
 function getApiKey() {
   // Preferred: injected global for demo builds
@@ -93,6 +105,22 @@ function clearError() {
   el.error.textContent = "";
 }
 
+function setDrillLoading(on) {
+  el.drillLoading.classList.toggle("hidden", !on);
+  el.btnAsk.disabled = on;
+  el.drillQuestion.disabled = on;
+}
+
+function showDrillError(message) {
+  el.drillError.textContent = message;
+  el.drillError.classList.remove("hidden");
+}
+
+function clearDrillError() {
+  el.drillError.classList.add("hidden");
+  el.drillError.textContent = "";
+}
+
 function normalizeMermaid(raw) {
   const s = String(raw || "").replace(/\r\n/g, "\n").trim();
   // Remove accidental fences if the model misbehaves
@@ -108,6 +136,62 @@ function normalizeMermaid(raw) {
     .replace(/^(flowchart)\s*$/im, "flowchart TD")
     .replace(/^(graph)\s*$/im, "graph TD");
   return forced.trim();
+}
+
+function getNodeLabel(nodeEl) {
+  const texts = [];
+  nodeEl.querySelectorAll("text").forEach((t) => {
+    const v = (t.textContent || "").trim();
+    if (v) texts.push(v);
+  });
+  if (texts.length) return texts.join(" ").replace(/\s+/g, " ").trim();
+
+  const fo = nodeEl.querySelector("foreignObject");
+  if (fo) {
+    const v = (fo.textContent || "").trim();
+    if (v) return v.replace(/\s+/g, " ").trim();
+  }
+
+  const v = (nodeEl.textContent || "").trim();
+  return v.replace(/\s+/g, " ").trim();
+}
+
+function highlightSelectedNode(nodeEl) {
+  el.diagram.querySelectorAll(".node.is-selected").forEach((n) => n.classList.remove("is-selected"));
+  if (nodeEl) nodeEl.classList.add("is-selected");
+}
+
+function handleNodeQuestion(label, nodeEl) {
+  selectedNodeLabel = label;
+  el.drillDetails.open = true;
+  el.drillNode.textContent = label || "Unknown node";
+  highlightSelectedNode(nodeEl);
+
+  const q = `How is \"${label}\" performed?`;
+  el.drillQuestion.value = q;
+  el.drillQuestion.focus();
+  el.drillQuestion.setSelectionRange(el.drillQuestion.value.length, el.drillQuestion.value.length);
+}
+
+function bindNodeClicks() {
+  const nodes = el.diagram.querySelectorAll(".node");
+  nodes.forEach((node) => {
+    node.style.cursor = "pointer";
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "button");
+
+    const onPick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const label = getNodeLabel(node);
+      if (label) handleNodeQuestion(label, node);
+    };
+
+    node.addEventListener("click", onPick);
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") onPick(e);
+    });
+  });
 }
 
 function guessFallbackDiagram(promptText) {
@@ -156,10 +240,59 @@ async function callClaudeForMermaid(userPrompt) {
   return text;
 }
 
+async function callClaudeForDrilldown(nodeLabel, question, diagramCode) {
+  const apiKey = getApiKey(); // optional; server can also use env var
+
+  const system =
+    "You are a precise, helpful tutor. Answer the user's question about a single step in a diagram.\n" +
+    "Be concrete and structured. Use short bullet points when helpful.\n" +
+    "If the step could be ambiguous, ask 1 short clarifying question.\n" +
+    "Do not include Mermaid code unless explicitly asked.\n";
+
+  const user = [
+    "Diagram context (Mermaid):",
+    diagramCode || "(none)",
+    "",
+    `Selected step: ${nodeLabel || "(unknown)"}`,
+    `Question: ${question}`,
+  ].join("\n");
+
+  const res = await fetch(ANTHROPIC_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(apiKey ? { "x-client-key": apiKey } : {}),
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 700,
+      system,
+      messages: [{ role: "user", content: user }],
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Claude API error (${res.status}). ${text || "No details."}`.trim());
+  }
+
+  const data = await res.json();
+  const parts = Array.isArray(data?.content) ? data.content : [];
+  const text = parts
+    .filter((p) => p && p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text)
+    .join("\n")
+    .trim();
+
+  if (!text) throw new Error("Empty response from Claude.");
+  return text;
+}
+
 async function renderMermaid(code) {
   const clean = normalizeMermaid(code);
   el.codeBlock.textContent = clean;
   el.codeDetails.open = true;
+  lastMermaidCode = clean;
 
   // Ensure unique IDs for repeated renders
   const id = `mmd-${Math.random().toString(16).slice(2)}`;
@@ -169,6 +302,7 @@ async function renderMermaid(code) {
     const { svg } = await mermaid.render(id, clean);
     el.diagram.innerHTML = svg;
     setStatus("pill--ok", "Rendered");
+    bindNodeClicks();
   } catch (e) {
     // Show raw code if render fails
     el.diagram.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
@@ -255,6 +389,29 @@ async function onSubmit(e) {
   }
 }
 
+async function onAskDrilldown(e) {
+  e.preventDefault();
+  clearDrillError();
+
+  const question = (el.drillQuestion.value || "").trim();
+  if (!question) return;
+
+  if (!selectedNodeLabel) {
+    showDrillError("Click a node in the diagram first.");
+    return;
+  }
+
+  setDrillLoading(true);
+  try {
+    const answer = await callClaudeForDrilldown(selectedNodeLabel, question, lastMermaidCode);
+    el.drillAnswer.textContent = answer;
+  } catch (err) {
+    showDrillError(err?.message || String(err));
+  } finally {
+    setDrillLoading(false);
+  }
+}
+
 function initMermaid() {
   mermaid.initialize({
     startOnLoad: false,
@@ -277,6 +434,7 @@ function boot() {
   el.btnSetKey.addEventListener("click", setApiKeyInteractive);
   el.btnCopy.addEventListener("click", copyCode);
   el.btnFormat.addEventListener("click", cleanUpCode);
+  el.drillForm.addEventListener("submit", onAskDrilldown);
 
   // Initial demo diagram
   const initial = "flowchart TD\nA[DiagramStore Demo] --> B[Type prompt]\nB --> C[Generate]\nC --> D[Mermaid renders here]";

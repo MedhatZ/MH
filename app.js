@@ -492,6 +492,56 @@ function selectCardNode(card, label, nodeEl) {
   input.focus();
 }
 
+// Initial-render constants. Readability over fit: tall diagrams keep their
+// scale and grow the card downward instead of being squished into the viewport.
+const READABLE_MIN_SCALE = 0.85;
+const READABLE_MAX_SCALE = 1.4;
+const DIAGRAM_PAD_X = 24;
+const DIAGRAM_PAD_Y = 24;
+const DIAGRAM_MIN_HEIGHT = 280;
+
+function computeReadableLayout(svgEl, viewport) {
+  const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+  const vbW = (vb && vb.width) || 800;
+  const vbH = (vb && vb.height) || 600;
+
+  // Available width inside the diagram viewport, minus a comfortable side padding.
+  const containerW = Math.max(360, viewport.clientWidth || 800);
+  const widthFit = (containerW - DIAGRAM_PAD_X * 2) / vbW;
+
+  // Width-only fit, clamped so diagrams stay readable. Height is intentionally
+  // not part of the calculation — tall graphs extend downward instead.
+  const initialScale = Math.min(READABLE_MAX_SCALE, Math.max(READABLE_MIN_SCALE, widthFit));
+
+  return {
+    vbW,
+    vbH,
+    initialScale,
+    scaledW: vbW * initialScale,
+    scaledH: vbH * initialScale,
+  };
+}
+
+function applyReadableLayout(svgEl, viewport, layout) {
+  // The SVG is rendered at exactly the chosen pixel scale. svg-pan-zoom will
+  // treat this as the natural state (zoom 1.0), and any user zoom multiplies
+  // on top of it.
+  const w = Math.round(layout.scaledW);
+  const h = Math.round(layout.scaledH);
+  svgEl.setAttribute("width", String(w));
+  svgEl.setAttribute("height", String(h));
+  svgEl.style.width = `${w}px`;
+  svgEl.style.height = `${h}px`;
+  svgEl.style.maxWidth = "100%";
+  svgEl.style.display = "block";
+  svgEl.removeAttribute("preserveAspectRatio");
+
+  // Grow the viewport to host the scaled diagram + padding. Tall diagrams
+  // expand the card downward so the page (not the diagram) becomes scrollable.
+  const targetVpH = Math.max(DIAGRAM_MIN_HEIGHT, h + DIAGRAM_PAD_Y * 2);
+  viewport.style.height = `${targetVpH}px`;
+}
+
 function setupZoomPan(card) {
   const viewport = card.element.querySelector(".diagramCard__diagram");
   const pan = card.element.querySelector(".diagramCard__pan");
@@ -502,18 +552,11 @@ function setupZoomPan(card) {
   const btnReset = card.element.querySelector(".diagramCard__zoomReset");
   if (!svgEl) return;
 
-  // Make the SVG fill its viewport so svg-pan-zoom can fit/center against the container.
-  svgEl.setAttribute("width", "100%");
-  svgEl.setAttribute("height", "100%");
-  svgEl.style.width = "100%";
-  svgEl.style.height = "100%";
-  svgEl.style.maxWidth = "100%";
-  svgEl.style.display = "block";
-  // Remove Mermaid's inline max-width style (we control sizing now).
-  svgEl.style.removeProperty && svgEl.style.removeProperty("max-width");
-  svgEl.style.maxWidth = "100%";
+  const layout = computeReadableLayout(svgEl, viewport);
+  applyReadableLayout(svgEl, viewport, layout);
+  card.initialScale = layout.initialScale;
 
-  // Track drag distance so a click-after-drag is suppressed on nodes.
+  // Track drag distance so a click-after-drag does not also select a node.
   let downAt = null;
   const onMouseDown = (e) => {
     downAt = { x: e.clientX, y: e.clientY };
@@ -534,21 +577,26 @@ function setupZoomPan(card) {
   card._panTracking = { onMouseDown, onMouseMove, onMouseUp };
 
   if (typeof svgPanZoom === "undefined") {
-    // Library failed to load — leave the SVG static; node clicks still work.
-    if (zoomLabel) zoomLabel.textContent = "100%";
+    if (zoomLabel) zoomLabel.textContent = `${Math.round(layout.initialScale * 100)}%`;
     return;
   }
 
-  const updateLabel = (z) => {
-    if (zoomLabel) zoomLabel.textContent = `${Math.round(z * 100)}%`;
+  // Display the visual scale (initialScale × user zoom). svg-pan-zoom's
+  // logical zoom starts at 1.0 because the SVG is already rendered at
+  // initialScale pixels.
+  const updateLabel = (userZoom) => {
+    if (zoomLabel) {
+      zoomLabel.textContent = `${Math.round(layout.initialScale * userZoom * 100)}%`;
+    }
   };
 
   const inst = svgPanZoom(svgEl, {
     zoomEnabled: true,
     panEnabled: true,
     controlIconsEnabled: false,
-    fit: true,
-    center: true,
+    // Do NOT fit/center on init — we want our readability-first scale to win.
+    fit: false,
+    center: false,
     contain: false,
     minZoom: 0.2,
     maxZoom: 8,
@@ -565,25 +613,35 @@ function setupZoomPan(card) {
   btnIn.addEventListener("click", () => inst.zoomIn());
   btnOut.addEventListener("click", () => inst.zoomOut());
   btnReset.addEventListener("click", () => {
+    // Restore the original readable view: scale 1.0 (which is initialScale in
+    // pixels) and zero pan offset. This recreates the "Miro-style" landing.
     inst.resetZoom();
-    inst.center();
-    inst.fit();
+    inst.pan({ x: 0, y: 0 });
+    updateLabel(1);
   });
 
-  // Keep diagrams nicely fitted when the viewport size changes.
+  // Recompute width-fit on container resize so a window resize doesn't leave
+  // diagrams either too cramped or too zoomed out.
+  let resizeRaf = 0;
   const onResize = () => {
-    try {
-      inst.resize();
-      inst.fit();
-      inst.center();
-    } catch {
-      // ignore
-    }
+    cancelAnimationFrame(resizeRaf);
+    resizeRaf = requestAnimationFrame(() => {
+      try {
+        const next = computeReadableLayout(svgEl, viewport);
+        applyReadableLayout(svgEl, viewport, next);
+        card.initialScale = next.initialScale;
+        inst.resize();
+        // Keep the user's logical zoom factor; only the base pixel size moved.
+        updateLabel(inst.getZoom());
+      } catch {
+        // ignore
+      }
+    });
   };
   window.addEventListener("resize", onResize);
   card._onResize = onResize;
 
-  updateLabel(inst.getZoom());
+  updateLabel(1);
   card.viewport = inst;
 }
 
@@ -744,15 +802,15 @@ function initMermaid() {
       curve: "basis",
       useMaxWidth: true,
       htmlLabels: true,
-      nodeSpacing: 50,
-      rankSpacing: 80,
-      padding: 20,
+      nodeSpacing: 60,
+      rankSpacing: 90,
+      padding: 24,
     },
-    sequence: { useMaxWidth: true },
+    sequence: { useMaxWidth: true, boxMargin: 12, messageMargin: 40 },
     gantt: { useMaxWidth: true },
     journey: { useMaxWidth: true },
     class: { useMaxWidth: true },
-    state: { useMaxWidth: true },
+    state: { useMaxWidth: true, padding: 20 },
     er: { useMaxWidth: true },
   });
 }

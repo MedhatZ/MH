@@ -423,8 +423,9 @@ button,input{font:inherit}
   background:#fff;
   border:1px solid var(--border);
   border-radius:10px;
-  min-height:260px;
-  height:min(72vh, 680px);
+  min-height:280px;
+  /* Height is set dynamically by setupZoomPan() so tall diagrams extend the
+     card downward naturally instead of being shrunk to fit. */
   overflow:hidden;
   position:relative;
   cursor:grab;
@@ -432,18 +433,19 @@ button,input{font:inherit}
 }
 .diagramCard__diagram.is-panning{cursor:grabbing}
 .diagramCard__pan{
-  display:block;
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
   width:100%;
-  height:100%;
-  position:relative;
+  min-height:100%;
+  padding:24px;
 }
-/* Responsive SVG sizing. Overrides Mermaid's inline max-width so the SVG fills
-   its viewport both before and after svg-pan-zoom takes over. */
+/* Don't force the SVG to fill the container — JS sets the SVG's pixel
+   dimensions to the readability-first scale, and the pan layer centers it. */
 .diagramCard svg{
-  width:100% !important;
-  max-width:100% !important;
-  height:100%;
   display:block;
+  max-width:100%;
+  height:auto;
 }
 .diagramCard__diagram .node text,
 .diagramCard__diagram .label text{
@@ -684,7 +686,6 @@ button,input{font:inherit}
   .workspace{grid-template-columns: 1fr; }
   .sidebar{order:2}
   .content{order:1}
-  .diagramCard__diagram{height:min(60vh, 520px)}
   .diagramCard[data-depth="2"]{margin-left:20px}
   .diagramCard[data-depth="3"]{margin-left:40px}
   .diagramCard[data-depth="4"]{margin-left:60px}
@@ -704,7 +705,8 @@ button,input{font:inherit}
   .diagramCard__askForm{flex-direction:column;align-items:stretch}
   .diagramCard__askBtn{width:100%}
   .diagramCard__diagramControls{top:auto;bottom:14px;right:14px}
-  .diagramCard__diagram{min-height:200px;height:min(56vh, 420px)}
+  .diagramCard__diagram{min-height:240px}
+  .diagramCard__pan{padding:12px}
   .diagramCard[data-depth]{margin-left:0 !important}
   .diagramCard[data-depth]:not([data-depth="1"])::before,
   .diagramCard[data-depth]:not([data-depth="1"])::after{display:none}

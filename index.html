@@ -121,10 +121,18 @@
                 </form>
 
                 <div class="drill__answerWrap">
-                  <div class="drill__label">Answer</div>
-                  <div id="drillAnswer" class="drill__answer">
-                    Click a node to start exploring step‑by‑step.
+                  <div class="drill__label">Sub‑diagram</div>
+                  <div id="drillDiagramWrap" class="drill__diagramWrap">
+                    <div id="drillDiagram" class="drill__diagram" aria-label="Rendered sub-diagram"></div>
                   </div>
+
+                  <details id="drillCodeDetails" class="drill__code" open>
+                    <summary class="drill__codeSummary">
+                      <span>Sub‑diagram Mermaid code</span>
+                      <span class="code__summaryHint">click to collapse</span>
+                    </summary>
+                    <pre class="code__pre"><code id="drillCodeBlock" class="code__code"></code></pre>
+                  </details>
                 </div>
               </div>
             </details>

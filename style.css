@@ -301,15 +301,33 @@ button,input{font:inherit}
   font-size:13px;
 }
 .drill__answerWrap{margin-top:12px}
-.drill__answer{
+.drill__diagramWrap{
   margin-top:8px;
+  padding:12px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(16,24,40,.08) 1px, transparent 0) 0 0/18px 18px;
+}
+.drill__diagram{
+  background:#fff;
   border:1px solid var(--border);
   border-radius:12px;
   padding:12px;
-  background:#f9fafb;
-  font-size:13px;
-  line-height:1.6;
-  white-space:pre-wrap;
+  min-height:220px;
+  overflow:auto;
+}
+.drill__diagram svg{max-width:100%;height:auto;display:block}
+.drill__code{margin-top:10px}
+.drill__codeSummary{
+  cursor:pointer;
+  padding:10px 2px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  user-select:none;
+  font-weight:700;
 }
 
 .diagram .node{transition:filter .12s ease, opacity .12s ease}

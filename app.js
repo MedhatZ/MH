@@ -43,13 +43,16 @@ const el = {
   drillForm: document.getElementById("drillForm"),
   drillNode: document.getElementById("drillNode"),
   drillQuestion: document.getElementById("drillQuestion"),
-  drillAnswer: document.getElementById("drillAnswer"),
+  drillDiagram: document.getElementById("drillDiagram"),
+  drillCodeDetails: document.getElementById("drillCodeDetails"),
+  drillCodeBlock: document.getElementById("drillCodeBlock"),
   drillLoading: document.getElementById("drillLoading"),
   drillError: document.getElementById("drillError"),
   btnAsk: document.getElementById("btnAsk"),
 };
 
 let lastMermaidCode = "";
+let lastDrillMermaidCode = "";
 let selectedNodeLabel = "";
 
 function getApiKey() {
@@ -156,25 +159,35 @@ function getNodeLabel(nodeEl) {
   return v.replace(/\s+/g, " ").trim();
 }
 
-function highlightSelectedNode(nodeEl) {
-  el.diagram.querySelectorAll(".node.is-selected").forEach((n) => n.classList.remove("is-selected"));
+function highlightSelectedNode(rootEl, nodeEl) {
+  rootEl.querySelectorAll(".node.is-selected").forEach((n) => n.classList.remove("is-selected"));
   if (nodeEl) nodeEl.classList.add("is-selected");
 }
 
-function handleNodeQuestion(label, nodeEl) {
+function handleNodeQuestion(label, nodeEl, rootEl) {
   selectedNodeLabel = label;
   el.drillDetails.open = true;
   el.drillNode.textContent = label || "Unknown node";
-  highlightSelectedNode(nodeEl);
+  highlightSelectedNode(rootEl, nodeEl);
 
-  const q = `How is \"${label}\" performed?`;
+  const q =
+    `Generate a detailed Mermaid flowchart explaining how to perform:\n` +
+    `"${label}"\n\n` +
+    `Requirements:\n` +
+    `- Return ONLY Mermaid code\n` +
+    `- Use flowchart TD\n` +
+    `- Make the diagram vertically readable\n` +
+    `- Keep labels concise\n` +
+    `- Use valid Mermaid syntax only\n` +
+    `- No markdown fences\n` +
+    `- No explanations\n`;
   el.drillQuestion.value = q;
   el.drillQuestion.focus();
   el.drillQuestion.setSelectionRange(el.drillQuestion.value.length, el.drillQuestion.value.length);
 }
 
-function bindNodeClicks() {
-  const nodes = el.diagram.querySelectorAll(".node");
+function bindNodeClicks(rootEl) {
+  const nodes = rootEl.querySelectorAll(".node");
   nodes.forEach((node) => {
     node.style.cursor = "pointer";
     node.setAttribute("tabindex", "0");
@@ -184,7 +197,7 @@ function bindNodeClicks() {
       ev.preventDefault();
       ev.stopPropagation();
       const label = getNodeLabel(node);
-      if (label) handleNodeQuestion(label, node);
+      if (label) handleNodeQuestion(label, node, rootEl);
     };
 
     node.addEventListener("click", onPick);
@@ -240,21 +253,27 @@ async function callClaudeForMermaid(userPrompt) {
   return text;
 }
 
-async function callClaudeForDrilldown(nodeLabel, question, diagramCode) {
+async function callClaudeForDrilldown(nodeLabel, question, diagramCode, parentDrillCode) {
   const apiKey = getApiKey(); // optional; server can also use env var
 
   const system =
-    "You are a precise, helpful tutor. Answer the user's question about a single step in a diagram.\n" +
-    "Be concrete and structured. Use short bullet points when helpful.\n" +
-    "If the step could be ambiguous, ask 1 short clarifying question.\n" +
-    "Do not include Mermaid code unless explicitly asked.\n";
+    "You are a Mermaid.js diagram expert. Return ONLY valid Mermaid diagram code with no explanation, no backticks, no markdown fences.\n" +
+    "Requirements:\n" +
+    "- Always use flowchart TD\n" +
+    "- Keep it vertically readable and compact\n" +
+    "- Keep labels concise; use \\n line breaks for long labels\n" +
+    "- Avoid crossings by using stages/subgraphs where helpful\n";
 
   const user = [
-    "Diagram context (Mermaid):",
+    "Parent diagram context (Mermaid):",
     diagramCode || "(none)",
     "",
+    "Previous sub-diagram (optional):",
+    parentDrillCode || "(none)",
+    "",
     `Selected step: ${nodeLabel || "(unknown)"}`,
-    `Question: ${question}`,
+    "",
+    question,
   ].join("\n");
 
   const res = await fetch(ANTHROPIC_ENDPOINT, {
@@ -288,6 +307,20 @@ async function callClaudeForDrilldown(nodeLabel, question, diagramCode) {
   return text;
 }
 
+async function renderDrillMermaid(code) {
+  const clean = normalizeMermaid(code);
+  lastDrillMermaidCode = clean;
+  el.drillCodeBlock.textContent = clean;
+  el.drillCodeDetails.open = true;
+
+  const id = `mmd-drill-${Math.random().toString(16).slice(2)}`;
+  el.drillDiagram.innerHTML = "";
+
+  const { svg } = await mermaid.render(id, clean);
+  el.drillDiagram.innerHTML = svg;
+  bindNodeClicks(el.drillDiagram);
+}
+
 async function renderMermaid(code) {
   const clean = normalizeMermaid(code);
   el.codeBlock.textContent = clean;
@@ -302,7 +335,7 @@ async function renderMermaid(code) {
     const { svg } = await mermaid.render(id, clean);
     el.diagram.innerHTML = svg;
     setStatus("pill--ok", "Rendered");
-    bindNodeClicks();
+    bindNodeClicks(el.diagram);
   } catch (e) {
     // Show raw code if render fails
     el.diagram.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
@@ -403,8 +436,8 @@ async function onAskDrilldown(e) {
 
   setDrillLoading(true);
   try {
-    const answer = await callClaudeForDrilldown(selectedNodeLabel, question, lastMermaidCode);
-    el.drillAnswer.textContent = answer;
+    const mermaidCode = await callClaudeForDrilldown(selectedNodeLabel, question, lastMermaidCode, lastDrillMermaidCode);
+    await renderDrillMermaid(mermaidCode);
   } catch (err) {
     showDrillError(err?.message || String(err));
   } finally {
@@ -441,6 +474,10 @@ function boot() {
   renderMermaid(initial).catch(() => {});
   el.codeBlock.textContent = initial;
   setStatus("pill--idle", "Idle");
+
+  // Initial drill-down placeholder diagram
+  const drillInitial = "flowchart TD\nA[Click any node] --> B[Ask for a sub-diagram]\nB --> C[Explore deeper by clicking sub-nodes]";
+  renderDrillMermaid(drillInitial).catch(() => {});
 }
 
 boot();

@@ -220,6 +220,15 @@ button,input{font:inherit}
   min-height:360px;
   overflow:auto;
 }
+.diagram svg{
+  max-width:100%;
+  height:auto;
+  display:block;
+}
+.diagram .node text,
+.diagram .label text{
+  font-size:14px;
+}
 
 .code{
   border-top:1px solid var(--border);

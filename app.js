@@ -5,7 +5,7 @@ const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 const SYSTEM_PROMPT =
-  "You are a Mermaid.js diagram expert. Return ONLY valid Mermaid diagram code with no explanation, no backticks, no markdown fences.";
+  "You are a Mermaid.js diagram expert. Return ONLY valid Mermaid diagram code with no explanation, no backticks, no markdown fences.\n\nLayout rules:\n- Prefer TOP-DOWN layouts (use flowchart TB / graph TB for flowcharts).\n- Keep node labels short and readable.\n- For long labels, insert line breaks using \\n.\n- Avoid extremely wide graphs; use grouping/subgraphs when helpful.\n";
 
 const TAGS = [
   { id: "flowchart", label: "Flowchart", hint: "flowchart" },
@@ -100,7 +100,12 @@ function normalizeMermaid(raw) {
     .replace(/^```[a-zA-Z]*\n/, "")
     .replace(/\n```$/, "")
     .trim();
-  return noFences;
+  // Force top-down for flowcharts when the model returns LR/RL/BT
+  // (Keeps other diagram types unchanged.)
+  const forced = noFences
+    .replace(/^(flowchart|graph)\s+(LR|RL|BT)\b/im, "$1 TB")
+    .replace(/^(flowchart|graph)\s*$/im, "$1 TB");
+  return forced.trim();
 }
 
 function guessFallbackDiagram(promptText) {

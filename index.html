@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DiagramStore Demo</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true"></div>
+          <div class="brand__text">DiagramStore</div>
+        </div>
+
+        <nav class="nav">
+          <a href="#" class="nav__link">Homepage</a>
+          <a href="#" class="nav__link">Category</a>
+          <a href="#" class="nav__link">More</a>
+          <a href="#" class="nav__link">Contact Us</a>
+          <a href="#" class="nav__link">My Space</a>
+        </nav>
+
+        <div class="topbar__actions">
+          <button id="btnSetKey" class="icon-btn" type="button" title="Set API key" aria-label="Set API key">
+            <span aria-hidden="true">🔑</span>
+          </button>
+          <button class="icon-btn" type="button" title="Favorites" aria-label="Favorites">
+            <span aria-hidden="true">♡</span>
+          </button>
+          <button class="icon-btn" type="button" title="Cart" aria-label="Cart">
+            <span aria-hidden="true">🛒</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="hero">
+        <div class="hero__content">
+          <div class="hero__title">Search Diagrams</div>
+          <div class="hero__subtitle">in DiagramStore.com</div>
+
+          <form id="promptForm" class="search" autocomplete="off">
+            <div class="search__row">
+              <input
+                id="promptInput"
+                class="search__input"
+                name="prompt"
+                type="text"
+                placeholder='e.g. "Create a flowchart for user login with OTP"'
+                required
+              />
+              <button id="btnGenerate" class="search__btn" type="submit">Generate</button>
+            </div>
+            <div class="search__hint">
+              Tip: pick a diagram type from the left, then describe what you want.
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="sidebar" aria-label="Diagram types">
+          <div class="sidebar__section">
+            <div class="sidebar__title">Sample Diagrams</div>
+            <div id="tagList" class="tags" role="list"></div>
+          </div>
+        </aside>
+
+        <section class="content" aria-label="Diagram preview">
+          <div class="content__header">
+            <div class="content__title">Preview</div>
+            <div class="content__meta">
+              <span id="statusPill" class="pill pill--idle">Idle</span>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div id="loading" class="loading hidden" aria-live="polite">
+              <div class="spinner" aria-hidden="true"></div>
+              <div class="loading__text">Generating diagram…</div>
+            </div>
+
+            <div id="errorBox" class="error hidden" role="alert"></div>
+
+            <div class="diagramWrap">
+              <div id="diagram" class="diagram" aria-label="Rendered diagram"></div>
+            </div>
+
+            <details id="codeDetails" class="code" open>
+              <summary class="code__summary">
+                <span>Mermaid code</span>
+                <span class="code__summaryHint">click to collapse</span>
+              </summary>
+              <div class="code__body">
+                <div class="code__toolbar">
+                  <button id="btnCopy" class="btn" type="button">Copy</button>
+                  <button id="btnFormat" class="btn btn--ghost" type="button" title="Trim and normalize">
+                    Clean up
+                  </button>
+                </div>
+                <pre class="code__pre"><code id="codeBlock" class="code__code"></code></pre>
+              </div>
+            </details>
+          </div>
+        </section>
+      </section>
+
+      <footer class="footer">
+        <div class="footer__inner">
+          <div>DiagramStore Demo • Mermaid.js + Claude</div>
+          <div class="footer__right">
+            <a class="footer__link" href="https://mermaid.js.org/" target="_blank" rel="noreferrer">Mermaid docs</a>
+          </div>
+        </div>
+      </footer>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

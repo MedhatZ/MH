@@ -1,4 +1,4 @@
-/* global mermaid */
+/* global mermaid, svgPanZoom */
 
 const ANTHROPIC_ENDPOINT = "/api/messages";
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
@@ -30,6 +30,7 @@ const el = {
   btnGenerate: document.getElementById("btnGenerate"),
   btnSetKey: document.getElementById("btnSetKey"),
   btnClearHistory: document.getElementById("btnClearHistory"),
+  btnBackToTop: document.getElementById("backToTop"),
   tagList: document.getElementById("tagList"),
   loading: document.getElementById("loading"),
   error: document.getElementById("errorBox"),
@@ -402,6 +403,7 @@ function removeCard(cardId) {
   const idx = history.findIndex((c) => c.id === cardId);
   if (idx < 0) return;
   const card = history[idx];
+  teardownZoomPan(card);
   card.element.remove();
   history.splice(idx, 1);
   for (const c of history) renderBreadcrumb(c);
@@ -409,7 +411,10 @@ function removeCard(cardId) {
 }
 
 function clearHistory() {
-  for (const card of history.slice()) card.element.remove();
+  for (const card of history.slice()) {
+    teardownZoomPan(card);
+    card.element.remove();
+  }
   history.length = 0;
   updateHistoryUi();
 }
@@ -490,121 +495,116 @@ function selectCardNode(card, label, nodeEl) {
 function setupZoomPan(card) {
   const viewport = card.element.querySelector(".diagramCard__diagram");
   const pan = card.element.querySelector(".diagramCard__pan");
+  const svgEl = pan && pan.querySelector("svg");
   const zoomLabel = card.element.querySelector(".diagramCard__zoomLabel");
   const btnIn = card.element.querySelector(".diagramCard__zoomIn");
   const btnOut = card.element.querySelector(".diagramCard__zoomOut");
   const btnReset = card.element.querySelector(".diagramCard__zoomReset");
+  if (!svgEl) return;
 
-  const state = { scale: 1, tx: 0, ty: 0 };
-  const MIN = 0.2;
-  const MAX = 5;
+  // Make the SVG fill its viewport so svg-pan-zoom can fit/center against the container.
+  svgEl.setAttribute("width", "100%");
+  svgEl.setAttribute("height", "100%");
+  svgEl.style.width = "100%";
+  svgEl.style.height = "100%";
+  svgEl.style.maxWidth = "100%";
+  svgEl.style.display = "block";
+  // Remove Mermaid's inline max-width style (we control sizing now).
+  svgEl.style.removeProperty && svgEl.style.removeProperty("max-width");
+  svgEl.style.maxWidth = "100%";
 
-  const apply = () => {
-    pan.style.transform = `translate(${state.tx}px, ${state.ty}px) scale(${state.scale})`;
-    if (zoomLabel) zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
-  };
-
-  const measureNatural = () => {
-    const svgEl = pan.querySelector("svg");
-    if (!svgEl) return { w: 0, h: 0 };
-    // Prefer viewBox so we get the diagram's natural drawing size, regardless of any inline transform.
-    const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
-    if (vb && vb.width > 0 && vb.height > 0) return { w: vb.width, h: vb.height };
-    // Fall back to a transform-free measurement.
-    const prev = pan.style.transform;
-    pan.style.transform = "none";
-    const r = svgEl.getBoundingClientRect();
-    pan.style.transform = prev;
-    return { w: r.width, h: r.height };
-  };
-
-  const setScale = (next, cx, cy) => {
-    const clamped = Math.max(MIN, Math.min(MAX, next));
-    if (clamped === state.scale) return;
-    const rect = viewport.getBoundingClientRect();
-    const px = cx != null ? cx - rect.left : rect.width / 2;
-    const py = cy != null ? cy - rect.top : rect.height / 2;
-    state.tx = px - (px - state.tx) * (clamped / state.scale);
-    state.ty = py - (py - state.ty) * (clamped / state.scale);
-    state.scale = clamped;
-    apply();
-  };
-
-  const fit = () => {
-    const vRect = viewport.getBoundingClientRect();
-    const nat = measureNatural();
-    if (!nat.w || !nat.h || !vRect.width || !vRect.height) {
-      state.scale = 1;
-      state.tx = 0;
-      state.ty = 0;
-      apply();
-      return;
-    }
-    const pad = 16;
-    const fitScale = Math.min(
-      (vRect.width - pad * 2) / nat.w,
-      (vRect.height - pad * 2) / nat.h,
-      1.0,
-    );
-    const scale = Math.max(MIN, Math.min(MAX, fitScale));
-    state.scale = scale;
-    state.tx = Math.round((vRect.width - nat.w * scale) / 2);
-    state.ty = Math.round((vRect.height - nat.h * scale) / 2);
-    apply();
-  };
-
-  btnIn.addEventListener("click", () => setScale(state.scale * 1.2));
-  btnOut.addEventListener("click", () => setScale(state.scale / 1.2));
-  btnReset.addEventListener("click", fit);
-
-  viewport.addEventListener(
-    "wheel",
-    (e) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      setScale(state.scale * factor, e.clientX, e.clientY);
-    },
-    { passive: false },
-  );
-
-  viewport.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    if (e.target.closest && e.target.closest(".node")) return;
-    e.preventDefault();
-
-    let lastX = e.clientX;
-    let lastY = e.clientY;
-    let moved = 0;
+  // Track drag distance so a click-after-drag is suppressed on nodes.
+  let downAt = null;
+  const onMouseDown = (e) => {
+    downAt = { x: e.clientX, y: e.clientY };
     viewport.classList.add("is-panning");
+  };
+  const onMouseMove = (e) => {
+    if (!downAt) return;
+    const d = Math.abs(e.clientX - downAt.x) + Math.abs(e.clientY - downAt.y);
+    if (d > 4) card.suppressClickUntil = Date.now() + 200;
+  };
+  const onMouseUp = () => {
+    downAt = null;
+    viewport.classList.remove("is-panning");
+  };
+  viewport.addEventListener("mousedown", onMouseDown);
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+  card._panTracking = { onMouseDown, onMouseMove, onMouseUp };
 
-    const onMove = (ev) => {
-      const dx = ev.clientX - lastX;
-      const dy = ev.clientY - lastY;
-      lastX = ev.clientX;
-      lastY = ev.clientY;
-      state.tx += dx;
-      state.ty += dy;
-      moved += Math.abs(dx) + Math.abs(dy);
-      apply();
-    };
+  if (typeof svgPanZoom === "undefined") {
+    // Library failed to load — leave the SVG static; node clicks still work.
+    if (zoomLabel) zoomLabel.textContent = "100%";
+    return;
+  }
 
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      viewport.classList.remove("is-panning");
-      if (moved > 4) card.suppressClickUntil = Date.now() + 150;
-    };
+  const updateLabel = (z) => {
+    if (zoomLabel) zoomLabel.textContent = `${Math.round(z * 100)}%`;
+  };
 
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+  const inst = svgPanZoom(svgEl, {
+    zoomEnabled: true,
+    panEnabled: true,
+    controlIconsEnabled: false,
+    fit: true,
+    center: true,
+    contain: false,
+    minZoom: 0.2,
+    maxZoom: 8,
+    zoomScaleSensitivity: 0.25,
+    dblClickZoomEnabled: false,
+    mouseWheelZoomEnabled: true,
+    preventMouseEventsDefault: true,
+    onZoom: updateLabel,
+    onPan: () => {
+      if (downAt) card.suppressClickUntil = Date.now() + 200;
+    },
   });
 
-  card.viewport = { fit, setScale };
+  btnIn.addEventListener("click", () => inst.zoomIn());
+  btnOut.addEventListener("click", () => inst.zoomOut());
+  btnReset.addEventListener("click", () => {
+    inst.resetZoom();
+    inst.center();
+    inst.fit();
+  });
 
-  // Initial layout: fit-to-viewport so the diagram is centered and fully visible.
-  // Wait one frame so the SVG is laid out before we measure.
-  requestAnimationFrame(() => fit());
+  // Keep diagrams nicely fitted when the viewport size changes.
+  const onResize = () => {
+    try {
+      inst.resize();
+      inst.fit();
+      inst.center();
+    } catch {
+      // ignore
+    }
+  };
+  window.addEventListener("resize", onResize);
+  card._onResize = onResize;
+
+  updateLabel(inst.getZoom());
+  card.viewport = inst;
+}
+
+function teardownZoomPan(card) {
+  if (card._panTracking) {
+    document.removeEventListener("mousemove", card._panTracking.onMouseMove);
+    document.removeEventListener("mouseup", card._panTracking.onMouseUp);
+    card._panTracking = null;
+  }
+  if (card._onResize) {
+    window.removeEventListener("resize", card._onResize);
+    card._onResize = null;
+  }
+  if (card.viewport && typeof card.viewport.destroy === "function") {
+    try {
+      card.viewport.destroy();
+    } catch {
+      // ignore
+    }
+  }
+  card.viewport = null;
 }
 
 async function renderCardDiagram(card, code) {
@@ -614,6 +614,9 @@ async function renderCardDiagram(card, code) {
   const codeBlock = card.element.querySelector(".diagramCard__codeBlock");
   codeBlock.textContent = clean;
 
+  // If we're re-rendering, tear down any existing pan/zoom instance first.
+  teardownZoomPan(card);
+
   const pan = card.element.querySelector(".diagramCard__pan");
   pan.innerHTML = "";
   const renderId = `mmd-${card.id}-${Math.random().toString(16).slice(2)}`;
@@ -621,16 +624,9 @@ async function renderCardDiagram(card, code) {
   try {
     const { svg } = await mermaid.render(renderId, clean);
     pan.innerHTML = svg;
-    // Let the SVG size itself naturally; CSS handles container sizing.
-    const svgEl = pan.querySelector("svg");
-    if (svgEl) {
-      svgEl.removeAttribute("width");
-      svgEl.removeAttribute("height");
-      svgEl.style.maxWidth = "none";
-      svgEl.style.height = "auto";
-    }
     bindCardNodeClicks(card);
-    setupZoomPan(card);
+    // Defer pan/zoom init by a frame so the SVG is in the DOM and laid out.
+    requestAnimationFrame(() => setupZoomPan(card));
   } catch (e) {
     pan.innerHTML = `<div style="padding:12px;color:#b42318;font-size:13px;">
       Mermaid render error. Check the code below.
@@ -746,18 +742,32 @@ function initMermaid() {
     theme: "default",
     flowchart: {
       curve: "basis",
-      useMaxWidth: false,
+      useMaxWidth: true,
       htmlLabels: true,
-      nodeSpacing: 40,
-      rankSpacing: 50,
+      nodeSpacing: 50,
+      rankSpacing: 80,
+      padding: 20,
     },
-    sequence: { useMaxWidth: false },
-    gantt: { useMaxWidth: false },
-    journey: { useMaxWidth: false },
-    class: { useMaxWidth: false },
-    state: { useMaxWidth: false },
-    er: { useMaxWidth: false },
+    sequence: { useMaxWidth: true },
+    gantt: { useMaxWidth: true },
+    journey: { useMaxWidth: true },
+    class: { useMaxWidth: true },
+    state: { useMaxWidth: true },
+    er: { useMaxWidth: true },
   });
+}
+
+function setupBackToTop() {
+  if (!el.btnBackToTop) return;
+  const onScroll = () => {
+    const y = window.scrollY || document.documentElement.scrollTop || 0;
+    el.btnBackToTop.classList.toggle("is-visible", y > 480);
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  el.btnBackToTop.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  onScroll();
 }
 
 async function showWelcomeCard() {
@@ -786,6 +796,7 @@ function boot() {
   buildTags();
   initMermaid();
   updateHistoryUi();
+  setupBackToTop();
 
   el.form.addEventListener("submit", onSubmit);
   el.btnSetKey.addEventListener("click", setApiKeyInteractive);

@@ -5,7 +5,7 @@ const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 const SYSTEM_PROMPT =
-  "You are a Mermaid.js diagram expert. Return ONLY valid Mermaid diagram code with no explanation, no backticks, no markdown fences.\n\nLayout rules:\n- Prefer TOP-DOWN layouts (use flowchart TB / graph TB for flowcharts).\n- Keep node labels short and readable.\n- For long labels, insert line breaks using \\n.\n- Avoid extremely wide graphs; use grouping/subgraphs when helpful.\n";
+  "You are a Mermaid.js diagram expert. Return ONLY valid Mermaid diagram code with no explanation, no backticks, no markdown fences.\n\nRequired layout:\n- For flowcharts, ALWAYS start with: flowchart TD\n- Prefer vertical, top-down structure.\n\nReadability rules:\n- Keep node labels short and readable.\n- If a label is long, split it with \\n line breaks.\n- Avoid wide fan-out. Prefer 1–2 outgoing edges per node.\n- Reduce crossings by grouping related steps into subgraphs and using clear stages.\n- Keep the diagram compact; avoid unnecessary nodes.\n";
 
 const TAGS = [
   { id: "flowchart", label: "Flowchart", hint: "flowchart" },
@@ -100,11 +100,13 @@ function normalizeMermaid(raw) {
     .replace(/^```[a-zA-Z]*\n/, "")
     .replace(/\n```$/, "")
     .trim();
-  // Force top-down for flowcharts when the model returns LR/RL/BT
+  // Force top-down for flowcharts/graphs when the model returns LR/RL/BT/TB or no direction
   // (Keeps other diagram types unchanged.)
   const forced = noFences
-    .replace(/^(flowchart|graph)\s+(LR|RL|BT)\b/im, "$1 TB")
-    .replace(/^(flowchart|graph)\s*$/im, "$1 TB");
+    .replace(/^(flowchart)\s+(LR|RL|BT|TB|TD)\b/im, "flowchart TD")
+    .replace(/^(graph)\s+(LR|RL|BT|TB|TD)\b/im, "graph TD")
+    .replace(/^(flowchart)\s*$/im, "flowchart TD")
+    .replace(/^(graph)\s*$/im, "graph TD");
   return forced.trim();
 }
 
@@ -116,7 +118,7 @@ function guessFallbackDiagram(promptText) {
   if (t.includes("gantt")) return "gantt\ntitle Project Plan\nsection Phase 1\nTask A :a1, 2026-01-01, 7d\nTask B :after a1, 5d";
   if (t.includes("state")) return "stateDiagram-v2\n[*] --> Idle\nIdle --> Working : start\nWorking --> Idle : done";
   if (t.includes("mindmap")) return "mindmap\n  root((DiagramStore))\n    Search\n    Generate\n    Preview";
-  return "flowchart TB\nA[Prompt] --> B[Claude API]\nB --> C[Mermaid Code]\nC --> D[Render]";
+  return "flowchart TD\nA[Prompt] --> B[Claude API]\nB --> C[Mermaid Code]\nC --> D[Render]";
 }
 
 async function callClaudeForMermaid(userPrompt) {
@@ -258,6 +260,12 @@ function initMermaid() {
     startOnLoad: false,
     securityLevel: "strict",
     theme: "default",
+    flowchart: {
+      // Encourage compact, readable vertical layouts
+      curve: "linear",
+      nodeSpacing: 35,
+      rankSpacing: 55,
+    },
   });
 }
 
@@ -271,7 +279,7 @@ function boot() {
   el.btnFormat.addEventListener("click", cleanUpCode);
 
   // Initial demo diagram
-  const initial = "flowchart LR\nA[DiagramStore Demo] --> B[Type prompt]\nB --> C[Generate]\nC --> D[Mermaid renders here]";
+  const initial = "flowchart TD\nA[DiagramStore Demo] --> B[Type prompt]\nB --> C[Generate]\nC --> D[Mermaid renders here]";
   renderMermaid(initial).catch(() => {});
   el.codeBlock.textContent = initial;
   setStatus("pill--idle", "Idle");

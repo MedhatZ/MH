@@ -66,8 +66,8 @@ const imageMap = {
 const WIKIMEDIA_COMMONS_ENDPOINT = "https://commons.wikimedia.org/w/api.php";
 const COMMONS_MAX_IMAGES = 4;
 const COMMONS_THUMB_WIDTH = 420;
-const commonsCache = new Map(); // key(normalized query) -> { images, topScore, lowConfidence }
-const commonsInFlight = new Map(); // key -> Promise<{ images, topScore, lowConfidence }>
+const commonsCache = new Map(); // key(normalized query) -> images[]
+const commonsInFlight = new Map(); // key -> Promise<images[]>
 
 function getApiKey() {
   if (typeof window !== "undefined" && window.ANTHROPIC_API_KEY) return String(window.ANTHROPIC_API_KEY).trim();
@@ -360,14 +360,10 @@ function ensureCardImagesUi(card) {
   return null;
 }
 
-function setCardConfidenceBadge(card, { visible, text } = {}) {
+function setCardMediaVisible(card, visible) {
   const media = ensureCardImagesUi(card);
   if (!media) return;
-  const badgeEl = media.querySelector(".diagramCard__mediaBadge");
-  if (!badgeEl) return;
-  const show = Boolean(visible && text);
-  badgeEl.classList.toggle("hidden", !show);
-  if (show) badgeEl.textContent = text;
+  media.classList.toggle("hidden", !visible);
 }
 
 function setCardImagesStatus(card, kind, text) {
@@ -406,22 +402,15 @@ function renderCardImages(card, nodeLabel) {
 
   if (!images.length) {
     emptyEl.classList.remove("hidden");
-    if (!nodeLabel) emptyEl.textContent = "Select a node to see contextual images.";
-    else if (card.commonsTried) emptyEl.textContent = "No highly relevant technical references found.";
-    else emptyEl.textContent = "No related images found.";
-    setCardConfidenceBadge(card, { visible: false, text: "" });
+    emptyEl.textContent = "Select a node to see contextual images.";
+    // If the API returns nothing, hide the entire panel (no negative message).
+    if (nodeLabel && card.commonsTried) setCardMediaVisible(card, false);
+    else setCardMediaVisible(card, true);
     return;
   }
 
   emptyEl.classList.add("hidden");
-
-  // Low-confidence badge (only when Commons contributed results).
-  const commonsShown = Array.isArray(card.commonsImages) && card.commonsImages.length > 0;
-  if (commonsShown && card.commonsLowConfidence) {
-    setCardConfidenceBadge(card, { visible: true, text: "Related reference images" });
-  } else {
-    setCardConfidenceBadge(card, { visible: false, text: "" });
-  }
+  setCardMediaVisible(card, true);
 
   for (const img of images) {
     const btn = document.createElement("button");
@@ -540,7 +529,7 @@ function scoreCommonsCandidate({ title, snippet, categories }, contextTokens) {
     if (COMMONS_AVOID_WORDS.has(t)) avoidHits += 1;
   }
 
-  // Softer scoring: prefer relevance, but don't over-reject.
+  // Lightweight sorting only: prefer relevance, never hard-reject.
   score += overlap * 2;
   score += techHits * 1;
   score -= avoidHits * 1;
@@ -572,33 +561,33 @@ function mapCommonsImageInfoToImage(nodeLabel, title, ii) {
 function pickCommonsImages(scored, max = COMMONS_MAX_IMAGES) {
   const list = Array.isArray(scored) ? scored.slice() : [];
   list.sort((a, b) => b.score - a.score);
-  if (!list.length) return { images: [], topScore: 0, lowConfidence: true };
-
-  // Priority:
-  // A) technical/electronics image (techHits>0)
-  // B) generic hardware/device image (overlap>0)
-  // C) anything loosely related (top scored even if weak)
-  const preferred = list.filter((x) => x.techHits > 0 || x.overlap > 0);
-  const chosenBase = preferred.length ? preferred : list;
-  let chosen = chosenBase.slice(0, max);
-
-  // Minimum display behavior: try to show at least 2 if available.
-  if (chosen.length < 2 && list.length >= 2) chosen = list.slice(0, 2);
-
-  const images = uniqueImages(chosen.map((x) => x.img));
-  const topScore = Number(list[0]?.score || 0);
-  const lowConfidence = topScore < 2.5 || (chosen[0]?.techHits || 0) === 0;
-  return { images, topScore, lowConfidence };
+  if (!list.length) return [];
+  // Always display the top 3–4 returned images (after sorting).
+  return uniqueImages(list.slice(0, max).map((x) => x.img));
 }
 
-async function fetchCommonsImagesForContext({ cacheKey, nodeLabel, contextTokens, boosters }) {
+function buildCommonsFallbackQueries({ fullQuery, rootTokens, contextTokens }) {
+  const root = uniq(rootTokens || []);
+  const ctx = uniq(contextTokens || []);
+  const important = ctx.filter((t) => COMMONS_TECH_BOOST_WORDS.has(t) || COMMONS_DOMAIN_WORDS.has(t));
+  const top2Important = important.slice(0, 2);
+
+  const q1 = fullQuery;
+  const q2 = uniq([...(root.slice(0, 2) || []), ...(top2Important || [])]).join(" ").trim();
+  const q3 = uniq([...(root.slice(0, 3) || [])]).join(" ").trim();
+  const q4 = root[0] || "";
+
+  return uniq([q1, q2, q3, q4]).filter(Boolean);
+}
+
+async function fetchCommonsImagesForQuery({ cacheKey, nodeLabel, contextTokens }) {
   const key = normalizeForMatch(cacheKey);
   if (!key) return [];
   if (commonsCache.has(key)) return commonsCache.get(key) || [];
   if (commonsInFlight.has(key)) return commonsInFlight.get(key);
 
   const promise = (async () => {
-    const query = buildCommonsQueryFromContext(contextTokens, boosters);
+    const query = String(cacheKey || "").trim();
     if (!query) return [];
 
     // Step 1: search for files (namespace=6)
@@ -649,9 +638,9 @@ async function fetchCommonsImagesForContext({ cacheKey, nodeLabel, contextTokens
 
   commonsInFlight.set(key, promise);
   try {
-    const payload = await promise;
-    commonsCache.set(key, payload);
-    return payload;
+    const images = await promise;
+    commonsCache.set(key, images);
+    return images;
   } finally {
     commonsInFlight.delete(key);
   }
@@ -669,7 +658,7 @@ function maybeFetchCommonsImages(card, nodeLabel) {
   card.commonsKey = key;
   card.commonsImages = [];
   card.commonsTried = false;
-  card.commonsLowConfidence = false;
+  setCardMediaVisible(card, true);
 
   const local = getLocalImagesForLabel(card, nodeLabel);
   if (local.length >= COMMONS_MAX_IMAGES) {
@@ -680,9 +669,7 @@ function maybeFetchCommonsImages(card, nodeLabel) {
 
   // Cache hit: render immediately.
   if (commonsCache.has(key)) {
-    const payload = commonsCache.get(key) || { images: [], topScore: 0, lowConfidence: true };
-    card.commonsImages = payload.images || [];
-    card.commonsLowConfidence = Boolean(payload.lowConfidence);
+    card.commonsImages = commonsCache.get(key) || [];
     card.commonsTried = true;
     setCardImagesStatus(card, "idle", "");
     renderCardImages(card, nodeLabel);
@@ -695,17 +682,25 @@ function maybeFetchCommonsImages(card, nodeLabel) {
   setCardImagesStatus(card, "loading", "Searching technical references…");
   renderCardImages(card, nodeLabel);
 
-  fetchCommonsImagesForContext({
-    cacheKey,
-    nodeLabel,
+  const queries = buildCommonsFallbackQueries({
+    fullQuery: cacheKey,
+    rootTokens: ctx.rootTokens,
     contextTokens: ctx.tokens,
-    boosters,
-  })
-    .then((payload) => {
+  });
+
+  const run = async () => {
+    for (const q of queries) {
+      const imgs = await fetchCommonsImagesForQuery({ cacheKey: q, nodeLabel, contextTokens: ctx.tokens });
+      if (Array.isArray(imgs) && imgs.length) return imgs;
+    }
+    return [];
+  };
+
+  run()
+    .then((imgs) => {
       if (card.commonsFetchSeq !== seq) return; // stale
       if (normalizeForMatch(card.commonsKey || "") !== key) return;
-      card.commonsImages = payload?.images || [];
-      card.commonsLowConfidence = Boolean(payload?.lowConfidence);
+      card.commonsImages = imgs || [];
       card.commonsTried = true;
       setCardImagesStatus(card, "idle", "");
       renderCardImages(card, nodeLabel);
@@ -714,7 +709,6 @@ function maybeFetchCommonsImages(card, nodeLabel) {
       if (card.commonsFetchSeq !== seq) return;
       if (normalizeForMatch(card.commonsKey || "") !== key) return;
       card.commonsTried = true;
-      card.commonsLowConfidence = false;
       setCardImagesStatus(card, "idle", "");
       renderCardImages(card, nodeLabel);
     });
@@ -937,7 +931,6 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     commonsImages: [],
     commonsFetchSeq: 0,
     commonsTried: false,
-    commonsLowConfidence: false,
     suppressClickUntil: 0,
     viewport: null,
   };

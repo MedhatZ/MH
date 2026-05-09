@@ -398,6 +398,9 @@ button,input{font:inherit}
   background:linear-gradient(180deg,#fff,#fbfcff);
   min-width:0;
 }
+.diagramCard__media.hidden{
+  display:none;
+}
 .diagramCard__mediaHeader{
   display:flex;
   align-items:center;

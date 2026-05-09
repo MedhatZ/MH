@@ -180,6 +180,152 @@ function normalizeForMatch(s) {
     .trim();
 }
 
+const COMMONS_WEAK_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "or",
+  "the",
+  "to",
+  "of",
+  "in",
+  "on",
+  "for",
+  "with",
+  "from",
+  "by",
+  "via",
+  "into",
+  "over",
+  "under",
+  "about",
+  // user action / generic workflow words
+  "check",
+  "verify",
+  "adjust",
+  "configure",
+  "system",
+  "issue",
+  "problem",
+  "phase",
+  "step",
+  "process",
+  "procedure",
+  "troubleshoot",
+  "troubleshooting",
+  "fix",
+  "repair",
+  "inspect",
+  "test",
+  "ensure",
+  // ultra-generic words that pollute image search
+  "part",
+  "parts",
+  "thing",
+  "things",
+  "item",
+  "items",
+]);
+
+const COMMONS_DOMAIN_WORDS = new Set([
+  "radio",
+  "electronics",
+  "electronic",
+  "aircraft",
+  "aviation",
+  "helicopter",
+  "engine",
+  "computer",
+  "network",
+  "avionics",
+  "mechanical",
+  "hydraulic",
+  "electrical",
+]);
+
+const COMMONS_TECH_BOOST_WORDS = new Set([
+  "schematic",
+  "schematics",
+  "diagram",
+  "circuit",
+  "circuitry",
+  "pcb",
+  "board",
+  "component",
+  "components",
+  "hardware",
+  "device",
+  "equipment",
+  "power",
+  "battery",
+  "plug",
+  "connector",
+  "switch",
+  "knob",
+  "lever",
+  "panel",
+  "antenna",
+  "transceiver",
+  "receiver",
+  "transmitter",
+  "power-supply",
+  "supply",
+  "voltage",
+  "current",
+  "avionics",
+  "cockpit",
+  "landing",
+  "gear",
+]);
+
+const COMMONS_AVOID_WORDS = new Set([
+  "history",
+  "art",
+  "museum",
+  "painting",
+  "landscape",
+  "nature",
+  "people",
+  "person",
+  "war",
+  "battle",
+  "soldier",
+  "portrait",
+  "city",
+  "church",
+  "statue",
+  "flag",
+  "animal",
+  "flower",
+  "tree",
+]);
+
+function tokenizeKeywords(s) {
+  const v = normalizeForMatch(s);
+  if (!v) return [];
+  const parts = v.split(" ").filter(Boolean);
+  const out = [];
+  for (const p of parts) {
+    if (p.length <= 2) continue;
+    if (COMMONS_WEAK_WORDS.has(p)) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+function uniq(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const v of arr || []) {
+    const k = String(v || "").trim();
+    if (!k) continue;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
 function uniqueImages(images) {
   const out = [];
   const seen = new Set();
@@ -250,7 +396,9 @@ function renderCardImages(card, nodeLabel) {
 
   if (!images.length) {
     emptyEl.classList.remove("hidden");
-    emptyEl.textContent = nodeLabel ? "No related images found." : "Select a node to see contextual images.";
+    if (!nodeLabel) emptyEl.textContent = "Select a node to see contextual images.";
+    else if (card.commonsTried) emptyEl.textContent = "No highly relevant technical references found.";
+    else emptyEl.textContent = "No related images found.";
     return;
   }
 
@@ -280,22 +428,90 @@ function renderCardImages(card, nodeLabel) {
   }
 }
 
-function buildCommonsQuery(label) {
-  const base = normalizeForMatch(label);
-  if (!base) return "";
-  const tokens = base.split(" ").filter(Boolean);
-  const hasAny = (arr) => arr.some((t) => tokens.includes(t));
-  const hints = [];
+function getContextTokensForCard(card, nodeLabel) {
+  const path = typeof getAncestorPath === "function" ? getAncestorPath(card) : [card];
+  const root = path && path.length ? path[0] : card;
 
-  // Light heuristic "technical context" hints. Keep these generic; Commons search is broad.
-  if (hasAny(["radio", "antenna", "frequency", "avionics", "transceiver"])) hints.push("radio");
-  if (hasAny(["cockpit", "lever", "switch", "knob", "panel", "selector"])) hints.push("cockpit");
-  if (hasAny(["landing", "gear", "flaps", "rudder", "throttle"])) hints.push("aircraft");
-  if (hasAny(["helicopter", "collective", "cyclic"])) hints.push("helicopter");
+  const tokens = [];
+  // Root topic (often the initial prompt)
+  tokens.push(...tokenizeKeywords(root?.title || ""));
+  // Parent chain labels/titles
+  for (const c of path || []) tokens.push(...tokenizeKeywords(c?.title || ""));
+  // Clicked node label
+  tokens.push(...tokenizeKeywords(nodeLabel || ""));
 
-  const hintPart = hints.length ? ` ${[...new Set(hints)].join(" ")}` : "";
-  // Prefer files on Commons by searching in File namespace (srnamespace=6).
-  return `${base}${hintPart}`.trim();
+  const uniqTokens = uniq(tokens);
+  return { rootTokens: uniq(tokenizeKeywords(root?.title || "")), tokens: uniqTokens };
+}
+
+function domainBoostersFromRoot(rootTokens) {
+  const set = new Set(rootTokens || []);
+  const out = [];
+  const add = (w) => {
+    if (!w) return;
+    if (set.has(w)) return;
+    out.push(w);
+    set.add(w);
+  };
+
+  // If the root indicates a domain, append supporting context keywords.
+  if (rootTokens.some((t) => t === "radio" || t === "avionics")) {
+    add("radio");
+    add("electronics");
+    add("electrical");
+  }
+  if (rootTokens.some((t) => t === "electronics" || t === "electronic")) {
+    add("electronics");
+    add("hardware");
+    add("circuit");
+  }
+  if (rootTokens.some((t) => t === "aircraft" || t === "aviation" || t === "cockpit")) {
+    add("aircraft");
+    add("aviation");
+    add("cockpit");
+    add("avionics");
+  }
+  if (rootTokens.some((t) => t === "helicopter")) {
+    add("helicopter");
+    add("aviation");
+  }
+  if (rootTokens.some((t) => t === "engine")) {
+    add("engine");
+    add("mechanical");
+  }
+  if (rootTokens.some((t) => t === "computer" || t === "network")) {
+    add("computer");
+    add("network");
+    add("hardware");
+  }
+
+  return uniq(out);
+}
+
+function buildCommonsQueryFromContext(contextTokens, boosters) {
+  const base = uniq([...(contextTokens || []), ...(boosters || [])]).filter(Boolean);
+  // Keep queries compact to avoid overly broad search.
+  const trimmed = base.slice(0, 10);
+  return trimmed.join(" ").trim();
+}
+
+function scoreCommonsCandidate({ title, snippet, categories }, contextTokens) {
+  const ctx = new Set(contextTokens || []);
+  const txt = `${title || ""} ${snippet || ""} ${(categories || []).join(" ")}`;
+  const tokens = tokenizeKeywords(txt);
+  let score = 0;
+  let overlap = 0;
+  for (const t of tokens) {
+    if (ctx.has(t)) overlap += 1;
+    if (COMMONS_TECH_BOOST_WORDS.has(t)) score += 2;
+    if (COMMONS_AVOID_WORDS.has(t)) score -= 4;
+    if (COMMONS_DOMAIN_WORDS.has(t)) score += 1;
+  }
+  // Overlap is the main signal.
+  score += overlap * 3;
+  // Light penalty if the title/snippet looks unrelated.
+  if (overlap === 0) score -= 3;
+  return score;
 }
 
 function mapCommonsImageInfoToImage(nodeLabel, title, ii) {
@@ -314,48 +530,63 @@ function mapCommonsImageInfoToImage(nodeLabel, title, ii) {
   return { label, url: thumbUrl, fullUrl, source: "commons" };
 }
 
-async function fetchCommonsImagesForLabel(nodeLabel) {
-  const key = normalizeForMatch(nodeLabel);
+async function fetchCommonsImagesForContext({ cacheKey, nodeLabel, contextTokens, boosters }) {
+  const key = normalizeForMatch(cacheKey);
   if (!key) return [];
   if (commonsCache.has(key)) return commonsCache.get(key) || [];
   if (commonsInFlight.has(key)) return commonsInFlight.get(key);
 
   const promise = (async () => {
-    const query = buildCommonsQuery(nodeLabel);
+    const query = buildCommonsQueryFromContext(contextTokens, boosters);
     if (!query) return [];
 
     // Step 1: search for files (namespace=6)
     const searchUrl =
       `${WIKIMEDIA_COMMONS_ENDPOINT}?action=query&format=json&origin=*` +
-      `&list=search&srnamespace=6&srlimit=${encodeURIComponent(String(COMMONS_MAX_IMAGES))}` +
+      `&list=search&srnamespace=6&srlimit=${encodeURIComponent(String(12))}` +
       `&srsearch=${encodeURIComponent(query)}`;
     const searchRes = await fetch(searchUrl, { method: "GET" });
     if (!searchRes.ok) throw new Error(`Wikimedia search failed (${searchRes.status})`);
     const searchJson = await searchRes.json();
     const hits = Array.isArray(searchJson?.query?.search) ? searchJson.query.search : [];
-    const titles = hits
-      .map((h) => String(h?.title || "").trim())
-      .filter(Boolean)
-      .slice(0, COMMONS_MAX_IMAGES);
-    if (!titles.length) return [];
+    const candidates = hits
+      .map((h) => ({
+        title: String(h?.title || "").trim(),
+        snippet: String(h?.snippet || "").replace(/<[^>]+>/g, " ").trim(),
+      }))
+      .filter((h) => h.title);
+    if (!candidates.length) return [];
 
-    // Step 2: fetch thumbnails + full urls
+    // Step 2: fetch thumbnails + full urls + categories (for relevance scoring)
+    const titles = candidates.map((c) => c.title).slice(0, 12);
+
     const infoUrl =
       `${WIKIMEDIA_COMMONS_ENDPOINT}?action=query&format=json&origin=*` +
-      `&prop=imageinfo&iiprop=url|mime&iiurlwidth=${encodeURIComponent(String(COMMONS_THUMB_WIDTH))}` +
+      `&prop=imageinfo|categories&iiprop=url|mime&iiurlwidth=${encodeURIComponent(String(COMMONS_THUMB_WIDTH))}` +
+      `&cllimit=20&clshow=!hidden` +
       `&titles=${encodeURIComponent(titles.join("|"))}`;
     const infoRes = await fetch(infoUrl, { method: "GET" });
     if (!infoRes.ok) throw new Error(`Wikimedia imageinfo failed (${infoRes.status})`);
     const infoJson = await infoRes.json();
     const pages = infoJson?.query?.pages || {};
-    const out = [];
-    for (const t of titles) {
-      const page = Object.values(pages).find((p) => String(p?.title || "") === t);
+
+    const scored = [];
+    for (const c of candidates) {
+      const page = Object.values(pages).find((p) => String(p?.title || "") === c.title);
       const ii = Array.isArray(page?.imageinfo) ? page.imageinfo[0] : null;
-      const mapped = mapCommonsImageInfoToImage(nodeLabel, t, ii);
-      if (mapped) out.push(mapped);
+      const cats = Array.isArray(page?.categories)
+        ? page.categories.map((x) => String(x?.title || "").replace(/^Category:/i, "").replace(/_/g, " ").trim()).filter(Boolean)
+        : [];
+      const score = scoreCommonsCandidate({ title: c.title, snippet: c.snippet, categories: cats }, contextTokens);
+      const mapped = mapCommonsImageInfoToImage(nodeLabel, c.title, ii);
+      if (!mapped) continue;
+      scored.push({ score, img: mapped });
     }
-    return uniqueImages(out).slice(0, COMMONS_MAX_IMAGES);
+
+    scored.sort((a, b) => b.score - a.score);
+    const THRESHOLD = 5;
+    const filtered = scored.filter((s) => s.score >= THRESHOLD).slice(0, COMMONS_MAX_IMAGES).map((s) => s.img);
+    return uniqueImages(filtered);
   })();
 
   commonsInFlight.set(key, promise);
@@ -369,12 +600,17 @@ async function fetchCommonsImagesForLabel(nodeLabel) {
 }
 
 function maybeFetchCommonsImages(card, nodeLabel) {
-  const key = normalizeForMatch(nodeLabel);
+  const ctx = getContextTokensForCard(card, nodeLabel);
+  const boosters = domainBoostersFromRoot(ctx.rootTokens);
+  // Compose a stable cache key from context+node so "plug" doesn't fetch random plugs
+  const cacheKey = buildCommonsQueryFromContext(ctx.tokens, boosters);
+  const key = normalizeForMatch(cacheKey);
   if (!key) return;
 
   // Reset Commons state for this card/label.
   card.commonsKey = key;
   card.commonsImages = [];
+  card.commonsTried = false;
 
   const local = getLocalImagesForLabel(card, nodeLabel);
   if (local.length >= COMMONS_MAX_IMAGES) {
@@ -386,6 +622,7 @@ function maybeFetchCommonsImages(card, nodeLabel) {
   // Cache hit: render immediately.
   if (commonsCache.has(key)) {
     card.commonsImages = commonsCache.get(key) || [];
+    card.commonsTried = true;
     setCardImagesStatus(card, "idle", "");
     renderCardImages(card, nodeLabel);
     return;
@@ -397,17 +634,24 @@ function maybeFetchCommonsImages(card, nodeLabel) {
   setCardImagesStatus(card, "loading", "Searching technical references…");
   renderCardImages(card, nodeLabel);
 
-  fetchCommonsImagesForLabel(nodeLabel)
+  fetchCommonsImagesForContext({
+    cacheKey,
+    nodeLabel,
+    contextTokens: ctx.tokens,
+    boosters,
+  })
     .then((imgs) => {
       if (card.commonsFetchSeq !== seq) return; // stale
-      if (normalizeForMatch(card.selectedNode?.label || "") !== key) return; // node changed
+      if (normalizeForMatch(card.commonsKey || "") !== key) return;
       card.commonsImages = imgs || [];
+      card.commonsTried = true;
       setCardImagesStatus(card, "idle", "");
       renderCardImages(card, nodeLabel);
     })
     .catch(() => {
       if (card.commonsFetchSeq !== seq) return;
-      if (normalizeForMatch(card.selectedNode?.label || "") !== key) return;
+      if (normalizeForMatch(card.commonsKey || "") !== key) return;
+      card.commonsTried = true;
       setCardImagesStatus(card, "idle", "");
       renderCardImages(card, nodeLabel);
     });
@@ -628,6 +872,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     commonsKey: "",
     commonsImages: [],
     commonsFetchSeq: 0,
+    commonsTried: false,
     suppressClickUntil: 0,
     viewport: null,
   };

@@ -38,12 +38,29 @@ const el = {
   history: document.getElementById("diagramHistory"),
   historyEmpty: document.getElementById("historyEmpty"),
   historyCount: document.getElementById("historyCount"),
+  lightbox: document.getElementById("imageLightbox"),
+  lightboxClose: document.getElementById("imageLightboxClose"),
+  lightboxBackdrop: document.getElementById("imageLightboxBackdrop"),
+  lightboxImg: document.getElementById("imageLightboxImg"),
+  lightboxCaption: document.getElementById("imageLightboxCaption"),
 };
 
 // Diagram history: ordered list of card metadata.
-// Each card: { id, depth, title, parentLabel, parentCardId, timestamp, mermaidCode, element, selectedNode }
+// Each card: { id, depth, title, parentLabel, parentCardId, timestamp, mermaidCode, element, selectedNode, relatedImages }
 const history = [];
 let cardCounter = 0;
+
+// MVP: static/local image mapping by keyword. This is intentionally a plain
+// object so it can later be swapped for an async "image providers" pipeline.
+// Paths assume a static server that serves `/images/*` (e.g. `public/images`).
+const imageMap = {
+  "tune radio": [{ label: "Radio panel example", url: "/images/radio_panel.jpg" }],
+  "radio knob": [{ label: "Radio knob", url: "/images/radio_knob.png" }],
+  "adjust antenna": [{ label: "Antenna tuner", url: "/images/antenna.png" }],
+  antenna: [{ label: "Antenna hardware", url: "/images/antenna_hardware.jpg" }],
+  "landing gear lever": [{ label: "Landing gear lever", url: "/images/landing_gear_lever.jpg" }],
+  "landing gear": [{ label: "Landing gear control panel", url: "/images/landing_gear_panel.jpg" }],
+};
 
 function getApiKey() {
   if (typeof window !== "undefined" && window.ANTHROPIC_API_KEY) return String(window.ANTHROPIC_API_KEY).trim();
@@ -145,6 +162,121 @@ function formatTime(d) {
 function truncate(s, n) {
   const v = String(s || "");
   return v.length > n ? v.slice(0, n - 1) + "…" : v;
+}
+
+function normalizeForMatch(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[_\-]+/g, " ")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function uniqueImages(images) {
+  const out = [];
+  const seen = new Set();
+  for (const img of images || []) {
+    if (!img || !img.url) continue;
+    const key = `${img.url}::${img.label || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ label: img.label || "", url: img.url });
+  }
+  return out;
+}
+
+function getRelatedImagesForLabel(label) {
+  const q = normalizeForMatch(label);
+  if (!q) return [];
+
+  const hits = [];
+  for (const [rawKey, images] of Object.entries(imageMap)) {
+    const k = normalizeForMatch(rawKey);
+    if (!k) continue;
+    if (q === k || q.includes(k) || k.includes(q)) {
+      hits.push(...(Array.isArray(images) ? images : []));
+    }
+  }
+  return uniqueImages(hits);
+}
+
+function ensureCardImagesUi(card) {
+  const media = card.element.querySelector(".diagramCard__media");
+  if (media) return media;
+  return null;
+}
+
+function renderCardImages(card, nodeLabel) {
+  const media = ensureCardImagesUi(card);
+  if (!media) return;
+
+  const imagesEl = media.querySelector(".diagramCard__images");
+  const titleEl = media.querySelector(".diagramCard__mediaTitle");
+  const emptyEl = media.querySelector(".diagramCard__imagesEmpty");
+  if (!imagesEl || !titleEl || !emptyEl) return;
+
+  const fromCard = Array.isArray(card.relatedImages) ? card.relatedImages : [];
+  const fromMap = getRelatedImagesForLabel(nodeLabel);
+  const images = uniqueImages([...fromCard, ...fromMap]);
+
+  titleEl.textContent = nodeLabel ? `Image References — ${truncate(nodeLabel, 42)}` : "Image References";
+  imagesEl.innerHTML = "";
+
+  if (!images.length) {
+    emptyEl.classList.remove("hidden");
+    emptyEl.textContent = nodeLabel
+      ? `No reference images mapped for "${truncate(nodeLabel, 48)}" yet.`
+      : "Select a node to see contextual images.";
+    return;
+  }
+
+  emptyEl.classList.add("hidden");
+  for (const img of images) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "diagramCard__imageBtn";
+    btn.title = img.label || "Open image";
+    btn.setAttribute("aria-label", img.label || "Open image");
+
+    const elImg = document.createElement("img");
+    elImg.className = "diagramCard__image";
+    elImg.src = img.url;
+    elImg.alt = img.label || (nodeLabel ? `Reference image for ${nodeLabel}` : "Reference image");
+    elImg.loading = "lazy";
+    elImg.decoding = "async";
+
+    const cap = document.createElement("div");
+    cap.className = "diagramCard__imageLabel";
+    cap.textContent = img.label || "";
+
+    btn.appendChild(elImg);
+    if (img.label) btn.appendChild(cap);
+    btn.addEventListener("click", () => openImageLightbox(img.url, img.label || ""));
+    imagesEl.appendChild(btn);
+  }
+}
+
+function openImageLightbox(url, label) {
+  if (!el.lightbox || !el.lightboxImg) return;
+  el.lightboxImg.src = url;
+  el.lightboxImg.alt = label || "Image preview";
+  if (el.lightboxCaption) el.lightboxCaption.textContent = label || "";
+  el.lightbox.classList.remove("hidden");
+  document.documentElement.classList.add("is-modalOpen");
+  try {
+    el.lightboxClose && el.lightboxClose.focus({ preventScroll: true });
+  } catch {
+    el.lightboxClose && el.lightboxClose.focus();
+  }
+}
+
+function closeImageLightbox() {
+  if (!el.lightbox || !el.lightboxImg) return;
+  el.lightbox.classList.add("hidden");
+  document.documentElement.classList.remove("is-modalOpen");
+  if (el.lightboxImg) el.lightboxImg.src = "";
+  if (el.lightboxCaption) el.lightboxCaption.textContent = "";
 }
 
 function updateHistoryUi() {
@@ -265,15 +397,25 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     </header>
 
     <div class="diagramCard__body">
-      <div class="diagramCard__diagramWrap">
-        <div class="diagramCard__diagramControls" role="toolbar" aria-label="Zoom controls">
-          <button type="button" class="diagramCard__zoomBtn diagramCard__zoomOut" title="Zoom out (Ctrl+−)" aria-label="Zoom out">−</button>
-          <span class="diagramCard__zoomLabel">100%</span>
-          <button type="button" class="diagramCard__zoomBtn diagramCard__zoomIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in">+</button>
-          <button type="button" class="diagramCard__zoomBtn diagramCard__zoomReset" title="Reset zoom" aria-label="Reset zoom">⤢</button>
+      <div class="diagramCard__main">
+        <div class="diagramCard__diagramWrap">
+          <div class="diagramCard__diagramControls" role="toolbar" aria-label="Zoom controls">
+            <button type="button" class="diagramCard__zoomBtn diagramCard__zoomOut" title="Zoom out (Ctrl+−)" aria-label="Zoom out">−</button>
+            <span class="diagramCard__zoomLabel">100%</span>
+            <button type="button" class="diagramCard__zoomBtn diagramCard__zoomIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in">+</button>
+            <button type="button" class="diagramCard__zoomBtn diagramCard__zoomReset" title="Reset zoom" aria-label="Reset zoom">⤢</button>
+          </div>
+          <div class="diagramCard__diagram" aria-label="Rendered diagram">
+            <div class="diagramCard__pan"></div>
+          </div>
         </div>
-        <div class="diagramCard__diagram" aria-label="Rendered diagram">
-          <div class="diagramCard__pan"></div>
+
+        <div class="diagramCard__media">
+          <div class="diagramCard__mediaHeader">
+            <div class="diagramCard__mediaTitle">Image References</div>
+          </div>
+          <div class="diagramCard__imagesEmpty">Select a node to see contextual images.</div>
+          <div class="diagramCard__images"></div>
         </div>
       </div>
 
@@ -325,6 +467,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     mermaidCode: "",
     element: card,
     selectedNode: { label: "", el: null },
+    relatedImages: [],
     suppressClickUntil: 0,
     viewport: null,
   };
@@ -484,6 +627,8 @@ function selectCardNode(card, label, nodeEl) {
 
   const rootEl = card.element.querySelector(".diagramCard__diagram");
   highlightSelectedNode(rootEl, nodeEl);
+
+  renderCardImages(card, label);
 
   const nodeInfo = card.element.querySelector(".diagramCard__nodeInfo");
   nodeInfo.classList.remove("hidden");
@@ -795,6 +940,7 @@ async function renderCardDiagram(card, code) {
     const { svg } = await mermaid.render(renderId, clean);
     pan.innerHTML = svg;
     bindCardNodeClicks(card);
+    renderCardImages(card, card.selectedNode?.label || "");
     // Defer pan/zoom init by a frame so the SVG is in the DOM and laid out.
     requestAnimationFrame(() => setupZoomPan(card));
   } catch (e) {
@@ -977,6 +1123,12 @@ function boot() {
       clearHistory();
       setStatus("pill--idle", "Idle");
     }
+  });
+
+  if (el.lightboxClose) el.lightboxClose.addEventListener("click", closeImageLightbox);
+  if (el.lightboxBackdrop) el.lightboxBackdrop.addEventListener("click", closeImageLightbox);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeImageLightbox();
   });
 
   showWelcomeCard().catch(() => {});

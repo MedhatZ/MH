@@ -113,6 +113,15 @@
       </footer>
     </main>
 
+    <div id="imageLightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Image preview">
+      <button id="imageLightboxClose" class="lightbox__close" type="button" aria-label="Close image preview">×</button>
+      <div id="imageLightboxBackdrop" class="lightbox__backdrop" aria-hidden="true"></div>
+      <figure class="lightbox__content" role="document">
+        <img id="imageLightboxImg" class="lightbox__img" alt="" />
+        <figcaption id="imageLightboxCaption" class="lightbox__caption"></figcaption>
+      </figure>
+    </div>
+
     <script src="./app.js"></script>
   </body>
 </html>

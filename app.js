@@ -361,9 +361,20 @@ function ensureCardImagesUi(card) {
 }
 
 function setCardMediaVisible(card, visible) {
+  // Desktop-only collapse: we keep the panel stacked on mobile.
+  const main = card.element && card.element.querySelector(".diagramCard__main");
   const media = ensureCardImagesUi(card);
-  if (!media) return;
-  media.classList.toggle("hidden", !visible);
+  if (!main || !media) return;
+  main.classList.toggle("is-mediaOpen", !!visible);
+  card.imagesPanelOpen = !!visible;
+  // Re-fit after the layout width changes so the diagram recenters.
+  requestAnimationFrame(() => {
+    try {
+      applyInitialView(card);
+    } catch {
+      // ignore
+    }
+  });
 }
 
 function setCardImagesStatus(card, kind, text) {
@@ -658,6 +669,7 @@ function maybeFetchCommonsImages(card, nodeLabel) {
   card.commonsKey = key;
   card.commonsImages = [];
   card.commonsTried = false;
+  // On desktop: keep closed until user picks a node (this function is called from selectCardNode).
   setCardMediaVisible(card, true);
 
   const local = getLocalImagesForLabel(card, nodeLabel);
@@ -870,7 +882,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
         <div class="diagramCard__media">
           <div class="diagramCard__mediaHeader">
             <div class="diagramCard__mediaTitle">Image References</div>
-            <span class="diagramCard__mediaBadge hidden"></span>
+            <button type="button" class="diagramCard__mediaToggle">Hide images</button>
           </div>
           <div class="diagramCard__imagesStatus hidden" aria-live="polite"></div>
           <div class="diagramCard__imagesEmpty">Select a node to see contextual images.</div>
@@ -931,6 +943,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     commonsImages: [],
     commonsFetchSeq: 0,
     commonsTried: false,
+    imagesPanelOpen: false,
     suppressClickUntil: 0,
     viewport: null,
   };
@@ -942,6 +955,14 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
   card.querySelector(".diagramCard__minimize").addEventListener("click", () => toggleCardMinimize(meta));
   card.querySelector(".diagramCard__copy").addEventListener("click", (e) => copyCardCode(meta, e.currentTarget));
   card.querySelector(".diagramCard__askForm").addEventListener("submit", (e) => onAskFromCard(e, meta));
+  const toggleBtn = card.querySelector(".diagramCard__mediaToggle");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      const willOpen = !meta.imagesPanelOpen;
+      setCardMediaVisible(meta, willOpen);
+      toggleBtn.textContent = willOpen ? "Hide images" : "Show images";
+    });
+  }
 
   el.history.appendChild(card);
   updateHistoryUi();

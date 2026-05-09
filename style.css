@@ -380,9 +380,15 @@ button,input{font:inherit}
 
 .diagramCard__main{
   display:grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  /* Desktop: diagram gets priority; images column starts collapsed. */
+  grid-template-columns: minmax(560px, 1fr) 0px;
   gap:0;
   align-items:stretch;
+  transition: grid-template-columns .22s ease;
+}
+
+.diagramCard__main.is-mediaOpen{
+  grid-template-columns: minmax(560px, 1fr) 240px;
 }
 
 .diagramCard__diagramWrap{
@@ -397,10 +403,33 @@ button,input{font:inherit}
   border-left:1px solid var(--border);
   background:linear-gradient(180deg,#fff,#fbfcff);
   min-width:0;
+  width:240px;
+  min-width:220px;
+  max-width:260px;
+  overflow:hidden;
+  opacity:0;
+  transform:translateX(6px);
+  transition: opacity .18s ease, transform .18s ease;
+  pointer-events:none;
 }
-.diagramCard__media.hidden{
-  display:none;
+
+.diagramCard__main.is-mediaOpen .diagramCard__media{
+  opacity:1;
+  transform:translateX(0);
+  pointer-events:auto;
 }
+
+.diagramCard__mediaToggle{
+  border:1px solid var(--border);
+  background:#fff;
+  color:var(--muted);
+  border-radius:10px;
+  padding:6px 10px;
+  font-size:12px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.diagramCard__mediaToggle:hover{background:#f9fafb;color:#111827}
 .diagramCard__mediaHeader{
   display:flex;
   align-items:center;
@@ -887,11 +916,22 @@ html.is-modalOpen, html.is-modalOpen body{
 @media (max-width: 768px){
   .diagramCard__main{
     grid-template-columns: 1fr;
+    transition:none;
+  }
+  .diagramCard__main.is-mediaOpen{
+    grid-template-columns: 1fr;
   }
   .diagramCard__media{
     border-left:none;
     border-top:1px solid var(--border);
     padding:12px;
+    width:auto;
+    min-width:0;
+    max-width:none;
+    opacity:1;
+    transform:none;
+    pointer-events:auto;
+    transition:none;
   }
   .diagramCard__images{
     grid-template-columns: repeat(2, minmax(0, 1fr));

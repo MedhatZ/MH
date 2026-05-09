@@ -62,6 +62,13 @@ const imageMap = {
   "landing gear": [{ label: "Landing gear control panel", url: "/images/landing_gear_panel.jpg" }],
 };
 
+// Wikimedia Commons fallback (client-side; CORS via `origin=*`).
+const WIKIMEDIA_COMMONS_ENDPOINT = "https://commons.wikimedia.org/w/api.php";
+const COMMONS_MAX_IMAGES = 4;
+const COMMONS_THUMB_WIDTH = 420;
+const commonsCache = new Map(); // key(normalized label) -> images[]
+const commonsInFlight = new Map(); // key -> Promise<images[]>
+
 function getApiKey() {
   if (typeof window !== "undefined" && window.ANTHROPIC_API_KEY) return String(window.ANTHROPIC_API_KEY).trim();
   try {
@@ -178,10 +185,10 @@ function uniqueImages(images) {
   const seen = new Set();
   for (const img of images || []) {
     if (!img || !img.url) continue;
-    const key = `${img.url}::${img.label || ""}`;
+    const key = `${img.url}::${img.fullUrl || ""}::${img.label || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ label: img.label || "", url: img.url });
+    out.push({ label: img.label || "", url: img.url, fullUrl: img.fullUrl || img.url, source: img.source || "" });
   }
   return out;
 }
@@ -207,6 +214,23 @@ function ensureCardImagesUi(card) {
   return null;
 }
 
+function setCardImagesStatus(card, kind, text) {
+  const media = ensureCardImagesUi(card);
+  if (!media) return;
+  const statusEl = media.querySelector(".diagramCard__imagesStatus");
+  if (!statusEl) return;
+  statusEl.classList.toggle("hidden", !text);
+  statusEl.classList.toggle("is-loading", kind === "loading");
+  statusEl.classList.toggle("is-error", kind === "error");
+  statusEl.textContent = text || "";
+}
+
+function getLocalImagesForLabel(card, nodeLabel) {
+  const fromCard = Array.isArray(card.relatedImages) ? card.relatedImages : [];
+  const fromMap = getRelatedImagesForLabel(nodeLabel);
+  return uniqueImages([...fromCard, ...fromMap]);
+}
+
 function renderCardImages(card, nodeLabel) {
   const media = ensureCardImagesUi(card);
   if (!media) return;
@@ -214,20 +238,19 @@ function renderCardImages(card, nodeLabel) {
   const imagesEl = media.querySelector(".diagramCard__images");
   const titleEl = media.querySelector(".diagramCard__mediaTitle");
   const emptyEl = media.querySelector(".diagramCard__imagesEmpty");
-  if (!imagesEl || !titleEl || !emptyEl) return;
+  const statusEl = media.querySelector(".diagramCard__imagesStatus");
+  if (!imagesEl || !titleEl || !emptyEl || !statusEl) return;
 
-  const fromCard = Array.isArray(card.relatedImages) ? card.relatedImages : [];
-  const fromMap = getRelatedImagesForLabel(nodeLabel);
-  const images = uniqueImages([...fromCard, ...fromMap]);
+  const localImages = getLocalImagesForLabel(card, nodeLabel);
+  const commonsImages = Array.isArray(card.commonsImages) ? card.commonsImages : [];
+  const images = uniqueImages([...localImages, ...commonsImages]).slice(0, COMMONS_MAX_IMAGES);
 
   titleEl.textContent = nodeLabel ? `Image References — ${truncate(nodeLabel, 42)}` : "Image References";
   imagesEl.innerHTML = "";
 
   if (!images.length) {
     emptyEl.classList.remove("hidden");
-    emptyEl.textContent = nodeLabel
-      ? `No reference images mapped for "${truncate(nodeLabel, 48)}" yet.`
-      : "Select a node to see contextual images.";
+    emptyEl.textContent = nodeLabel ? "No related images found." : "Select a node to see contextual images.";
     return;
   }
 
@@ -252,9 +275,142 @@ function renderCardImages(card, nodeLabel) {
 
     btn.appendChild(elImg);
     if (img.label) btn.appendChild(cap);
-    btn.addEventListener("click", () => openImageLightbox(img.url, img.label || ""));
+    btn.addEventListener("click", () => openImageLightbox(img.fullUrl || img.url, img.label || ""));
     imagesEl.appendChild(btn);
   }
+}
+
+function buildCommonsQuery(label) {
+  const base = normalizeForMatch(label);
+  if (!base) return "";
+  const tokens = base.split(" ").filter(Boolean);
+  const hasAny = (arr) => arr.some((t) => tokens.includes(t));
+  const hints = [];
+
+  // Light heuristic "technical context" hints. Keep these generic; Commons search is broad.
+  if (hasAny(["radio", "antenna", "frequency", "avionics", "transceiver"])) hints.push("radio");
+  if (hasAny(["cockpit", "lever", "switch", "knob", "panel", "selector"])) hints.push("cockpit");
+  if (hasAny(["landing", "gear", "flaps", "rudder", "throttle"])) hints.push("aircraft");
+  if (hasAny(["helicopter", "collective", "cyclic"])) hints.push("helicopter");
+
+  const hintPart = hints.length ? ` ${[...new Set(hints)].join(" ")}` : "";
+  // Prefer files on Commons by searching in File namespace (srnamespace=6).
+  return `${base}${hintPart}`.trim();
+}
+
+function mapCommonsImageInfoToImage(nodeLabel, title, ii) {
+  if (!ii) return null;
+  const mime = String(ii.mime || "").toLowerCase();
+  const isSupported =
+    mime === "image/jpeg" || mime === "image/jpg" || mime === "image/png" || mime === "image/svg+xml";
+  if (!isSupported) return null;
+
+  const thumbUrl = ii.thumburl || ii.url;
+  const fullUrl = ii.url || ii.thumburl;
+  if (!thumbUrl || !fullUrl) return null;
+
+  const cleanTitle = String(title || "").replace(/^File:/i, "").replace(/_/g, " ").trim();
+  const label = cleanTitle || nodeLabel || "Wikimedia Commons";
+  return { label, url: thumbUrl, fullUrl, source: "commons" };
+}
+
+async function fetchCommonsImagesForLabel(nodeLabel) {
+  const key = normalizeForMatch(nodeLabel);
+  if (!key) return [];
+  if (commonsCache.has(key)) return commonsCache.get(key) || [];
+  if (commonsInFlight.has(key)) return commonsInFlight.get(key);
+
+  const promise = (async () => {
+    const query = buildCommonsQuery(nodeLabel);
+    if (!query) return [];
+
+    // Step 1: search for files (namespace=6)
+    const searchUrl =
+      `${WIKIMEDIA_COMMONS_ENDPOINT}?action=query&format=json&origin=*` +
+      `&list=search&srnamespace=6&srlimit=${encodeURIComponent(String(COMMONS_MAX_IMAGES))}` +
+      `&srsearch=${encodeURIComponent(query)}`;
+    const searchRes = await fetch(searchUrl, { method: "GET" });
+    if (!searchRes.ok) throw new Error(`Wikimedia search failed (${searchRes.status})`);
+    const searchJson = await searchRes.json();
+    const hits = Array.isArray(searchJson?.query?.search) ? searchJson.query.search : [];
+    const titles = hits
+      .map((h) => String(h?.title || "").trim())
+      .filter(Boolean)
+      .slice(0, COMMONS_MAX_IMAGES);
+    if (!titles.length) return [];
+
+    // Step 2: fetch thumbnails + full urls
+    const infoUrl =
+      `${WIKIMEDIA_COMMONS_ENDPOINT}?action=query&format=json&origin=*` +
+      `&prop=imageinfo&iiprop=url|mime&iiurlwidth=${encodeURIComponent(String(COMMONS_THUMB_WIDTH))}` +
+      `&titles=${encodeURIComponent(titles.join("|"))}`;
+    const infoRes = await fetch(infoUrl, { method: "GET" });
+    if (!infoRes.ok) throw new Error(`Wikimedia imageinfo failed (${infoRes.status})`);
+    const infoJson = await infoRes.json();
+    const pages = infoJson?.query?.pages || {};
+    const out = [];
+    for (const t of titles) {
+      const page = Object.values(pages).find((p) => String(p?.title || "") === t);
+      const ii = Array.isArray(page?.imageinfo) ? page.imageinfo[0] : null;
+      const mapped = mapCommonsImageInfoToImage(nodeLabel, t, ii);
+      if (mapped) out.push(mapped);
+    }
+    return uniqueImages(out).slice(0, COMMONS_MAX_IMAGES);
+  })();
+
+  commonsInFlight.set(key, promise);
+  try {
+    const imgs = await promise;
+    commonsCache.set(key, imgs);
+    return imgs;
+  } finally {
+    commonsInFlight.delete(key);
+  }
+}
+
+function maybeFetchCommonsImages(card, nodeLabel) {
+  const key = normalizeForMatch(nodeLabel);
+  if (!key) return;
+
+  // Reset Commons state for this card/label.
+  card.commonsKey = key;
+  card.commonsImages = [];
+
+  const local = getLocalImagesForLabel(card, nodeLabel);
+  if (local.length >= COMMONS_MAX_IMAGES) {
+    setCardImagesStatus(card, "idle", "");
+    renderCardImages(card, nodeLabel);
+    return;
+  }
+
+  // Cache hit: render immediately.
+  if (commonsCache.has(key)) {
+    card.commonsImages = commonsCache.get(key) || [];
+    setCardImagesStatus(card, "idle", "");
+    renderCardImages(card, nodeLabel);
+    return;
+  }
+
+  // Async fetch: do not block diagram rendering.
+  card.commonsFetchSeq = (card.commonsFetchSeq || 0) + 1;
+  const seq = card.commonsFetchSeq;
+  setCardImagesStatus(card, "loading", "Searching technical references…");
+  renderCardImages(card, nodeLabel);
+
+  fetchCommonsImagesForLabel(nodeLabel)
+    .then((imgs) => {
+      if (card.commonsFetchSeq !== seq) return; // stale
+      if (normalizeForMatch(card.selectedNode?.label || "") !== key) return; // node changed
+      card.commonsImages = imgs || [];
+      setCardImagesStatus(card, "idle", "");
+      renderCardImages(card, nodeLabel);
+    })
+    .catch(() => {
+      if (card.commonsFetchSeq !== seq) return;
+      if (normalizeForMatch(card.selectedNode?.label || "") !== key) return;
+      setCardImagesStatus(card, "idle", "");
+      renderCardImages(card, nodeLabel);
+    });
 }
 
 function openImageLightbox(url, label) {
@@ -414,6 +570,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
           <div class="diagramCard__mediaHeader">
             <div class="diagramCard__mediaTitle">Image References</div>
           </div>
+          <div class="diagramCard__imagesStatus hidden" aria-live="polite"></div>
           <div class="diagramCard__imagesEmpty">Select a node to see contextual images.</div>
           <div class="diagramCard__images"></div>
         </div>
@@ -468,6 +625,9 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     element: card,
     selectedNode: { label: "", el: null },
     relatedImages: [],
+    commonsKey: "",
+    commonsImages: [],
+    commonsFetchSeq: 0,
     suppressClickUntil: 0,
     viewport: null,
   };
@@ -628,7 +788,9 @@ function selectCardNode(card, label, nodeEl) {
   const rootEl = card.element.querySelector(".diagramCard__diagram");
   highlightSelectedNode(rootEl, nodeEl);
 
-  renderCardImages(card, label);
+  setCardImagesStatus(card, "idle", "");
+  renderCardImages(card, label); // local images are instant
+  maybeFetchCommonsImages(card, label); // Commons fallback is async
 
   const nodeInfo = card.element.querySelector(".diagramCard__nodeInfo");
   nodeInfo.classList.remove("hidden");
@@ -940,7 +1102,9 @@ async function renderCardDiagram(card, code) {
     const { svg } = await mermaid.render(renderId, clean);
     pan.innerHTML = svg;
     bindCardNodeClicks(card);
+    setCardImagesStatus(card, "idle", "");
     renderCardImages(card, card.selectedNode?.label || "");
+    if (card.selectedNode?.label) maybeFetchCommonsImages(card, card.selectedNode.label);
     // Defer pan/zoom init by a frame so the SVG is in the DOM and laid out.
     requestAnimationFrame(() => setupZoomPan(card));
   } catch (e) {

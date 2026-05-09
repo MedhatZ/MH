@@ -66,8 +66,8 @@ const imageMap = {
 const WIKIMEDIA_COMMONS_ENDPOINT = "https://commons.wikimedia.org/w/api.php";
 const COMMONS_MAX_IMAGES = 4;
 const COMMONS_THUMB_WIDTH = 420;
-const commonsCache = new Map(); // key(normalized label) -> images[]
-const commonsInFlight = new Map(); // key -> Promise<images[]>
+const commonsCache = new Map(); // key(normalized query) -> { images, topScore, lowConfidence }
+const commonsInFlight = new Map(); // key -> Promise<{ images, topScore, lowConfidence }>
 
 function getApiKey() {
   if (typeof window !== "undefined" && window.ANTHROPIC_API_KEY) return String(window.ANTHROPIC_API_KEY).trim();
@@ -360,6 +360,16 @@ function ensureCardImagesUi(card) {
   return null;
 }
 
+function setCardConfidenceBadge(card, { visible, text } = {}) {
+  const media = ensureCardImagesUi(card);
+  if (!media) return;
+  const badgeEl = media.querySelector(".diagramCard__mediaBadge");
+  if (!badgeEl) return;
+  const show = Boolean(visible && text);
+  badgeEl.classList.toggle("hidden", !show);
+  if (show) badgeEl.textContent = text;
+}
+
 function setCardImagesStatus(card, kind, text) {
   const media = ensureCardImagesUi(card);
   if (!media) return;
@@ -399,10 +409,20 @@ function renderCardImages(card, nodeLabel) {
     if (!nodeLabel) emptyEl.textContent = "Select a node to see contextual images.";
     else if (card.commonsTried) emptyEl.textContent = "No highly relevant technical references found.";
     else emptyEl.textContent = "No related images found.";
+    setCardConfidenceBadge(card, { visible: false, text: "" });
     return;
   }
 
   emptyEl.classList.add("hidden");
+
+  // Low-confidence badge (only when Commons contributed results).
+  const commonsShown = Array.isArray(card.commonsImages) && card.commonsImages.length > 0;
+  if (commonsShown && card.commonsLowConfidence) {
+    setCardConfidenceBadge(card, { visible: true, text: "Related reference images" });
+  } else {
+    setCardConfidenceBadge(card, { visible: false, text: "" });
+  }
+
   for (const img of images) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -459,21 +479,32 @@ function domainBoostersFromRoot(rootTokens) {
     add("radio");
     add("electronics");
     add("electrical");
+    add("device");
+    add("audio");
+    add("receiver");
+    add("tuner");
   }
   if (rootTokens.some((t) => t === "electronics" || t === "electronic")) {
     add("electronics");
     add("hardware");
     add("circuit");
+    add("device");
   }
   if (rootTokens.some((t) => t === "aircraft" || t === "aviation" || t === "cockpit")) {
     add("aircraft");
     add("aviation");
     add("cockpit");
     add("avionics");
+    add("controls");
+    add("landing");
   }
   if (rootTokens.some((t) => t === "helicopter")) {
     add("helicopter");
     add("aviation");
+    add("aircraft");
+    add("cockpit");
+    add("controls");
+    add("landing");
   }
   if (rootTokens.some((t) => t === "engine")) {
     add("engine");
@@ -501,17 +532,25 @@ function scoreCommonsCandidate({ title, snippet, categories }, contextTokens) {
   const tokens = tokenizeKeywords(txt);
   let score = 0;
   let overlap = 0;
+  let techHits = 0;
+  let avoidHits = 0;
   for (const t of tokens) {
     if (ctx.has(t)) overlap += 1;
-    if (COMMONS_TECH_BOOST_WORDS.has(t)) score += 2;
-    if (COMMONS_AVOID_WORDS.has(t)) score -= 4;
-    if (COMMONS_DOMAIN_WORDS.has(t)) score += 1;
+    if (COMMONS_TECH_BOOST_WORDS.has(t)) techHits += 1;
+    if (COMMONS_AVOID_WORDS.has(t)) avoidHits += 1;
   }
-  // Overlap is the main signal.
-  score += overlap * 3;
-  // Light penalty if the title/snippet looks unrelated.
-  if (overlap === 0) score -= 3;
-  return score;
+
+  // Softer scoring: prefer relevance, but don't over-reject.
+  score += overlap * 2;
+  score += techHits * 1;
+  score -= avoidHits * 1;
+
+  // Small domain bump if domain words appear (helps steer results but not mandatory).
+  for (const t of tokens) {
+    if (COMMONS_DOMAIN_WORDS.has(t)) score += 0.5;
+  }
+
+  return { score, overlap, techHits, avoidHits };
 }
 
 function mapCommonsImageInfoToImage(nodeLabel, title, ii) {
@@ -528,6 +567,28 @@ function mapCommonsImageInfoToImage(nodeLabel, title, ii) {
   const cleanTitle = String(title || "").replace(/^File:/i, "").replace(/_/g, " ").trim();
   const label = cleanTitle || nodeLabel || "Wikimedia Commons";
   return { label, url: thumbUrl, fullUrl, source: "commons" };
+}
+
+function pickCommonsImages(scored, max = COMMONS_MAX_IMAGES) {
+  const list = Array.isArray(scored) ? scored.slice() : [];
+  list.sort((a, b) => b.score - a.score);
+  if (!list.length) return { images: [], topScore: 0, lowConfidence: true };
+
+  // Priority:
+  // A) technical/electronics image (techHits>0)
+  // B) generic hardware/device image (overlap>0)
+  // C) anything loosely related (top scored even if weak)
+  const preferred = list.filter((x) => x.techHits > 0 || x.overlap > 0);
+  const chosenBase = preferred.length ? preferred : list;
+  let chosen = chosenBase.slice(0, max);
+
+  // Minimum display behavior: try to show at least 2 if available.
+  if (chosen.length < 2 && list.length >= 2) chosen = list.slice(0, 2);
+
+  const images = uniqueImages(chosen.map((x) => x.img));
+  const topScore = Number(list[0]?.score || 0);
+  const lowConfidence = topScore < 2.5 || (chosen[0]?.techHits || 0) === 0;
+  return { images, topScore, lowConfidence };
 }
 
 async function fetchCommonsImagesForContext({ cacheKey, nodeLabel, contextTokens, boosters }) {
@@ -577,23 +638,20 @@ async function fetchCommonsImagesForContext({ cacheKey, nodeLabel, contextTokens
       const cats = Array.isArray(page?.categories)
         ? page.categories.map((x) => String(x?.title || "").replace(/^Category:/i, "").replace(/_/g, " ").trim()).filter(Boolean)
         : [];
-      const score = scoreCommonsCandidate({ title: c.title, snippet: c.snippet, categories: cats }, contextTokens);
+      const s = scoreCommonsCandidate({ title: c.title, snippet: c.snippet, categories: cats }, contextTokens);
       const mapped = mapCommonsImageInfoToImage(nodeLabel, c.title, ii);
       if (!mapped) continue;
-      scored.push({ score, img: mapped });
+      scored.push({ score: s.score, overlap: s.overlap, techHits: s.techHits, avoidHits: s.avoidHits, img: mapped });
     }
 
-    scored.sort((a, b) => b.score - a.score);
-    const THRESHOLD = 5;
-    const filtered = scored.filter((s) => s.score >= THRESHOLD).slice(0, COMMONS_MAX_IMAGES).map((s) => s.img);
-    return uniqueImages(filtered);
+    return pickCommonsImages(scored, COMMONS_MAX_IMAGES);
   })();
 
   commonsInFlight.set(key, promise);
   try {
-    const imgs = await promise;
-    commonsCache.set(key, imgs);
-    return imgs;
+    const payload = await promise;
+    commonsCache.set(key, payload);
+    return payload;
   } finally {
     commonsInFlight.delete(key);
   }
@@ -611,6 +669,7 @@ function maybeFetchCommonsImages(card, nodeLabel) {
   card.commonsKey = key;
   card.commonsImages = [];
   card.commonsTried = false;
+  card.commonsLowConfidence = false;
 
   const local = getLocalImagesForLabel(card, nodeLabel);
   if (local.length >= COMMONS_MAX_IMAGES) {
@@ -621,7 +680,9 @@ function maybeFetchCommonsImages(card, nodeLabel) {
 
   // Cache hit: render immediately.
   if (commonsCache.has(key)) {
-    card.commonsImages = commonsCache.get(key) || [];
+    const payload = commonsCache.get(key) || { images: [], topScore: 0, lowConfidence: true };
+    card.commonsImages = payload.images || [];
+    card.commonsLowConfidence = Boolean(payload.lowConfidence);
     card.commonsTried = true;
     setCardImagesStatus(card, "idle", "");
     renderCardImages(card, nodeLabel);
@@ -640,10 +701,11 @@ function maybeFetchCommonsImages(card, nodeLabel) {
     contextTokens: ctx.tokens,
     boosters,
   })
-    .then((imgs) => {
+    .then((payload) => {
       if (card.commonsFetchSeq !== seq) return; // stale
       if (normalizeForMatch(card.commonsKey || "") !== key) return;
-      card.commonsImages = imgs || [];
+      card.commonsImages = payload?.images || [];
+      card.commonsLowConfidence = Boolean(payload?.lowConfidence);
       card.commonsTried = true;
       setCardImagesStatus(card, "idle", "");
       renderCardImages(card, nodeLabel);
@@ -652,6 +714,7 @@ function maybeFetchCommonsImages(card, nodeLabel) {
       if (card.commonsFetchSeq !== seq) return;
       if (normalizeForMatch(card.commonsKey || "") !== key) return;
       card.commonsTried = true;
+      card.commonsLowConfidence = false;
       setCardImagesStatus(card, "idle", "");
       renderCardImages(card, nodeLabel);
     });
@@ -813,6 +876,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
         <div class="diagramCard__media">
           <div class="diagramCard__mediaHeader">
             <div class="diagramCard__mediaTitle">Image References</div>
+            <span class="diagramCard__mediaBadge hidden"></span>
           </div>
           <div class="diagramCard__imagesStatus hidden" aria-live="polite"></div>
           <div class="diagramCard__imagesEmpty">Select a node to see contextual images.</div>
@@ -873,6 +937,7 @@ function createCard({ depth, title, parentLabel = "", parentCardId = null }) {
     commonsImages: [],
     commonsFetchSeq: 0,
     commonsTried: false,
+    commonsLowConfidence: false,
     suppressClickUntil: 0,
     viewport: null,
   };
